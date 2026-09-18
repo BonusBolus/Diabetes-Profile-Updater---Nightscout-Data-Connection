@@ -1,6 +1,6 @@
 # Profile Studio
 
-Build: **Nightscout-6**. This label also appears at the top of the sidebar, so you can confirm you are running this update.
+Build: **Nightscout-7**. This label also appears at the top of the sidebar, so you can confirm you are running this update.
 
 A local Python app for creating diabetes profile versions by comparing a draft with one or two saved references. Includes your **LenStandardV17** example in the **Standard** category, with **DIA 8.5 hours**. The `Undefined` field is omitted.
 
@@ -96,7 +96,7 @@ Choose **One day**, **Multiple days**, or **Median + band**, then select the day
 
 - **Glucose:** recorded CGM points, displayed in the profile's glucose unit. Nightscout SGV values in mg/dL are divided by 18 for mmol/L. Missing intervals longer than 15 minutes break the line.
 - **Temporary basal:** recorded absolute rates in U/h, clipped to their recorded durations, subsequent temp changes and cancellations. A preceding temp that overlaps the start date is requested as well. These are recorded rate intervals, not a reconstructed total of insulin delivered. No scheduled basal is inferred from your draft to fill gaps. Percent-only temp records appear in a separate panel using the raw Nightscout percent field; they are not converted to U/h.
-- **Boluses / carbs:** recorded amounts at their event times. Boluses share a panel with IOB; carb inputs share a panel with COB. SMBs are triangles, explicitly identified user boluses are rectangles, and boluses without a type flag are open diamonds. Marker area grows approximately with dose, using fixed scales across days and readable minimum/maximum sizes. User-bolus and carb markers have amount labels (U or g); SMB labels stay in the hover details to reduce clutter. Carb marker sizes likewise grow with grams, independently of the insulin scale. Classification uses `type` / `bolusType` and `isSMB`, never dose size or the generic Correction Bolus event name. Priming records are excluded. Each type is labeled in the legend and hover text.
+- **Boluses / carbs (One day / Multiple days):** recorded amounts at their event times. Boluses share a panel with IOB; carb inputs share a panel with COB. SMBs are triangles, explicitly identified user boluses are rectangles, and boluses without a type flag are open diamonds. Marker area grows approximately with dose, using fixed scales across days and readable minimum/maximum sizes. User-bolus and carb markers have amount labels (U or g); SMB labels stay in the hover details to reduce clutter. Carb marker sizes likewise grow with grams, independently of the insulin scale. Classification uses `type` / `bolusType` and `isSMB`, never dose size or the generic Correction Bolus event name. Priming records are excluded. Each type is labeled in the legend and hover text.
 - **IOB / COB:** uploaded AndroidAPS/OpenAPS values from device status. IOB uses the current `openaps.iob` record, not future entries in a prediction array; COB uses `openaps.suggested.COB`. Their own timestamps are used where available, so old status values are not shifted to newer upload times. Missing values remain gaps. The app does not recalculate IOB or COB from the edited profile.
 
 Use **Overlay · right axis** beside the profile graph to choose a Nightscout dataset or combined IOB/bolus or COB/carbs group, or **None**. The selector is beside the graph rather than in the sidebar. **Same axis scale** sets identical numeric limits on the left and right axes and links their vertical zoom. It does not convert units or imply that different quantities are equivalent. Turn it off to restore independently scaled axes (including the default 0–20 glucose range). Profile settings use the left axis and the selected dataset uses the right axis. Dataset choice is independent of the panels selected below. The main-app controls are shared across profile tabs.
@@ -123,7 +123,18 @@ The AndroidAPS upload formats were checked against its upstream [bolus serialize
 
  Dates use the profile timezone, including daylight-saving transitions. Clock jumps break recorded lines; the repeated hour on an autumn DST day appears at the same local clock times. If you change the profile timezone, reload Nightscout before comparing. Days are selected manually and are not automatically matched to profile versions or historical profile switches.
 
-The **Median + band** view summarizes glucose in five-minute time-of-day bins. It takes a median within each day/bin, then calculates the median and 25th–75th percentile band across days. Each day contributes at most one value per bin, including on repeated DST hours. Hover over the median for the number of contributing days. Empty bins are left empty; no smoothing or interpolation is applied. A single contributing day has a zero-width band. The other panels continue to show individual selected days, not averages or summed boluses.
+The **Median + band** view shows one median curve with a 25th–75th percentile band for **glucose, IOB, COB and recorded temporary basal**. These panels and their profile overlays do not stack individual days. Glucose/IOB/COB use the median of readings within each day's five-minute bin, then the median across days. Temporary basal first uses the duration-weighted rate within each day's known five-minute interval, then takes the median across days. Each day contributes once, including repeated DST clock bins. Missing bins stay blank; recorded zero is a real observation. Hover reports contributing days. Basal is based only on recorded temp intervals, not a reconstruction of the full scheduled basal. Percent-only basal records are summarized separately in their original units.
+
+Median mode adds two new panels automatically: **Boluses hourly** and **Carbs hourly**. Each contains a **day × hour heatmap** of recorded totals (U or g), with a **median hourly histogram** below it. Bolus totals include SMB, user and unclassified recorded boluses. A zero cell means no event was returned for an elapsed hour; unavailable treatments, nonexistent DST hours and future hours are blank. A partial current hour appears in the heatmap with a partial-hour hover label but is excluded from the histogram. Repeated autumn DST hours are combined within that day/hour. Complete zero-event hours participate in the median. Event markers are omitted from median IOB/COB panels and overlays, so they don't stack across days. Temporary targets retain their actual intervals and reason colors.
+
+Expanded-view date buttons still switch to a single recorded day, including that day's heatmap row and hourly amounts. They preserve the panel arrangement and fullscreen view. Switching overlays before cycling dates preserves median mode.
+
+## Performance
+
+Only the active profile tab builds its Nightscout viewer; Overview builds none. The schedule editors remain available and preserve unsaved changes across tab switches. Recorded traces, medians, hourly totals, daily statistics and recent prepared viewers are reused from bounded caches within the current loaded snapshot. These caches are local to your session, contain no new files, and are replaced on Load / refresh or discarded with Clear loaded data. Profile edits rebuild the relevant profile comparison without reprocessing the same recorded series. Unchanged viewers reuse their generated HTML. Nightscout is still contacted only by the manual load button.
+
+A local synthetic benchmark with seven days of five-minute glucose/IOB/COB data, half-hourly temp basals and recorded events measured one median-viewer's server-side preparation at **2.50 → 1.83 seconds** for a first build, and **2.36 → 0.0023 seconds** for an unchanged repeat. This includes the new summary panels. Additionally, hidden profile tabs no longer prepare duplicate viewers. These timings exclude Nightscout network requests and browser rendering; they are not a guarantee of total app latency on your computer. No dependency upgrade is needed.
+
 
 Loading is manual and limited to 31 days per request. Changing graph options, references, profile values or themes does not fetch data. The sidebar shows the loaded dates, timezone and refresh time; changing the connection form does not change this loaded snapshot until you submit it. Data and credentials stay in browser-session/server memory, are not saved in profile JSON or Excel, and are not automatically recovered after closing the session. **Clear loaded Nightscout data** removes the recorded-data snapshot. Optional `NIGHTSCOUT_URL` and `NIGHTSCOUT_TOKEN` environment variables can prefill the connection fields.
 
@@ -178,7 +189,7 @@ Excel does not include arbitrary additional overview fields, profile links or JS
 
 ## Updating an existing installation
 
-Close the app, then copy **all top-level `.py` files** and `README.md` from this package into your existing app folder. This includes `app.py`, `profiles.py`, `appearance.py`, `editor_history.py`, **`nightscout.py`**, **`nightscout_charts.py`** and **`nightscout_ui.py`**, **`graph_view.py`**, and **`comparison_tables.py`**. If you have not installed the labelled Excel import update yet, also copy `examples/profile-import.xlsx`. Keep your existing `data/profiles/` folder and `.venv` environment. No data migration or new dependencies are needed. Restart with `start.bat` or `.venv\Scripts\python.exe -m streamlit run app.py`.
+Close the app, then copy **all top-level `.py` files** and `README.md` from this package into your existing app folder. This includes `app.py`, `profiles.py`, `appearance.py`, `editor_history.py`, **`nightscout.py`**, **`nightscout_charts.py`** and **`nightscout_ui.py`**, **`graph_view.py`**, **`comparison_tables.py`**, **`nightscout_stats.py`**, and **`chart_cache.py`**. If you have not installed the labelled Excel import update yet, also copy `examples/profile-import.xlsx`. Keep your existing `data/profiles/` folder and `.venv` environment. No data migration or new dependencies are needed. Restart with `start.bat` or `.venv\Scripts\python.exe -m streamlit run app.py`.
 
 ## Source and tests
 
@@ -187,6 +198,8 @@ Close the app, then copy **all top-level `.py` files** and `README.md` from this
 - `profiles.py`: validation, interval calculations, importer and file storage.
 - `editor_history.py`: in-memory undo/redo for draft changes.
 - `nightscout.py`: read-only API requests, date windows and recorded-data normalization.
+- `nightscout_stats.py`: equal-day continuous medians and hourly event summaries.
+- `chart_cache.py`: bounded per-snapshot calculation and viewer caches.
 - `nightscout_charts.py`: aligned historical panels and glucose summaries.
 - `nightscout_ui.py`: manual connection, date cycling and display controls.
 - `graph_view.py`: offline Plotly viewer with a pinned profile and synchronized time zoom.

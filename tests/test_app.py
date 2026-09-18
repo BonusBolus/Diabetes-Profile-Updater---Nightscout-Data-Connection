@@ -32,6 +32,42 @@ class EditorTests(unittest.TestCase):
     def button(self,label):
         return next(x for x in self.at.button if x.label==label)
 
+    def test_readonly_modes_preserve_draft_and_show_saved_only(self):
+        self.add_reference('Drinking', .9)
+        at=self.at;at.run()
+        at.number_input(key='dia_1').set_value(9.7).run()
+        before=deepcopy(at.session_state.draft)
+        files={p.name:p.read_bytes() for p in Path(self.folder.name).glob('*.json')}
+        for mode,count in [('View',1),('Compare',2)]:
+            with patch('streamlit.plotly_chart') as draw:
+                at.radio(key='page').set_value(mode).run();self.clean()
+            figure=self.figures(draw.call_args_list)['readonly_plot_ic']
+            self.assertEqual(len(figure.data),count)
+            self.assertTrue(all(t.meta['label'] != 'Draft' for t in figure.data))
+            self.assertEqual(figure.layout.yaxis.rangemode,'normal')
+            self.assertFalse(any(b.label in ('Save as new version','Overwrite existing profile') for b in at.button))
+            self.assertEqual(at.session_state.draft,before)
+        at.radio(key='page').set_value('Editor').run();self.clean()
+        self.assertEqual(at.session_state.draft,before)
+        self.assertEqual(files,{p.name:p.read_bytes() for p in Path(self.folder.name).glob('*.json')})
+
+    def test_chosen_version_and_explicit_replacement(self):
+        at=self.at
+        at.number_input(key='version_1_standard').set_value(23).run();self.clean()
+        self.button('Save as new version').click().run();self.clean()
+        self.assertEqual({p['version'] for p in load_profiles(self.folder.name)[0]},{17,23})
+        original=next(p for p in load_profiles(self.folder.name)[0] if p['version']==17)
+        at.number_input(key='version_1_standard').set_value(17).run();self.clean()
+        self.assertTrue(self.button('Replace selected version').disabled)
+        at.number_input(key='dia_1').set_value(9.3).run()
+        next(c for c in at.checkbox if c.label.startswith('Replace Standard v17')).check().run()
+        self.button('Replace selected version').click().run();self.clean()
+        saved=load_profiles(self.folder.name)[0]
+        self.assertEqual(len(saved),2)
+        replaced=next(p for p in saved if p['version']==17)
+        self.assertEqual(replaced['id'],original['id'])
+        self.assertEqual(replaced['overview']['dia_hours'],9.3)
+
     def test_repeated_edits_bulk_save_reload_and_history(self):
         at = self.at
         baseline = next(Path(self.folder.name).glob('*.json')).read_bytes()
@@ -65,9 +101,9 @@ class EditorTests(unittest.TestCase):
         snapshot=deepcopy(at.session_state.draft)
         at.selectbox(key='reference_id').select(profiles[-1]['id']).run(); self.clean()
         self.assertEqual(at.session_state.draft,snapshot)
-        at.radio(key='page').set_value('History').run(); self.clean()
+        at.checkbox(key='show_history').set_value(True).run(); self.clean()
         self.assertEqual(len(at.dataframe[0].value),2)
-        at.radio(key='page').set_value('Editor').run(); self.clean()
+        at.checkbox(key='show_history').set_value(False).run(); self.clean()
         self.assertEqual(at.session_state.draft,snapshot)
         fresh=AppTest.from_file(str(ROOT/'app.py'),default_timeout=20).run()
         self.assertFalse(fresh.exception)
@@ -94,8 +130,8 @@ class EditorTests(unittest.TestCase):
         at.session_state['extra_1']={'edited_rows':{},'added_rows':[{'Field':'Activity','Type':'Text','Value':'Example note'}],'deleted_rows':[]}
         at.run(); self.clean()
         self.assertEqual(at.session_state.draft['schedules']['ic'][0]['value'],12)
-        at.radio(key='page').set_value('History').run(); self.clean()
-        at.radio(key='page').set_value('Editor').run(); self.clean()
+        at.checkbox(key='show_history').set_value(True).run(); self.clean()
+        at.checkbox(key='show_history').set_value(False).run(); self.clean()
         self.assertEqual(at.session_state.draft['schedules']['ic'][0]['value'],12)
         self.assertEqual(at.session_state.draft['overview']['extra']['Activity'],'Example note')
 
@@ -124,7 +160,7 @@ class EditorTests(unittest.TestCase):
         original = load_profiles(self.folder.name)[0][0]
         other = self.add_reference('Drinking', .9)
         self.at.run()
-        self.at.radio(key='page').set_value('History').run()
+        self.at.checkbox(key='show_history').set_value(True).run()
         self.button('Edit existing profile').click().run(); self.clean()
         at = self.at
         epoch = at.session_state.epoch
@@ -215,7 +251,8 @@ class EditorTests(unittest.TestCase):
             self.assertEqual(config.get_option('theme.base'), 'dark' if dark else 'light')
             figures = self.figures(draw.call_args_list)
             for metric, color in colors.items():
-                self.assertTrue(all(t.line.color == color for t in figures['plot_' + metric].data))
+                self.assertEqual(figures['plot_' + metric].data[-1].line.color, color)
+                self.assertNotEqual(figures['plot_' + metric].data[0].line.color, color)
                 self.assertEqual(figures['plot_' + metric].data[-1].line.dash, 'solid')
 
     def test_undo_redo_metadata_invalid_table_and_bulk_changes(self):
@@ -312,14 +349,16 @@ class EditorTests(unittest.TestCase):
             at.selectbox(key='second_reference_id').select(standard17['id']).run(); self.clean()
         self.assertEqual(at.session_state.draft,initial)
         fig = self.figures(draw.call_args_list)['plot_basal']
-        self.assertEqual([trace.name for trace in fig.data],['Reference 1 · Drinking v1','Reference 2 · Standard v17','Draft'])
+        self.assertEqual([trace.name for trace in fig.data],[drinking['name'],standard17['name'],initial['name']])
         self.assertEqual([trace.line.dash for trace in fig.data],['dash','dot','solid'])
+        self.assertEqual(len({trace.line.color for trace in fig.data}),3)
         self.assertAlmostEqual(fig.data[0].y[0],.72)
         self.assertAlmostEqual(fig.data[1].y[0],.8)
-        # The difference table uses each reference's values independently.
-        deltas = [x.value for x in at.dataframe if 'Change (%)' in x.value.columns]
-        basal = next(x for x in deltas if abs(x.iloc[0]['Reference']-.8)<1e-9)
-        self.assertAlmostEqual(basal.iloc[0]['Change (%)'],-10)
+        # Both references share one aligned table with the draft first.
+        tables = [x.value for x in at.dataframe if 'Draft' in x.value.columns and any(c.startswith('Reference 2') for c in x.value.columns)]
+        basal = next(x for x in tables if len(x) and x.iloc[0]['Draft'] == '0.72')
+        ref2 = next(c for c in basal.columns if c.startswith('Reference 2'))
+        self.assertEqual(basal.iloc[0][ref2], '0.8')
         epoch = at.session_state.epoch
         at.number_input(key=f'pct_{epoch}_basal').set_value(10)
         with patch('streamlit.plotly_chart') as draw:
@@ -329,8 +368,8 @@ class EditorTests(unittest.TestCase):
         self.assertAlmostEqual(fig.data[0].y[0],.72)
         self.assertAlmostEqual(fig.data[1].y[0],.8)
         edited = deepcopy(at.session_state.draft)
-        at.radio(key='page').set_value('History').run(); self.clean()
-        at.radio(key='page').set_value('Editor').run(); self.clean()
+        at.checkbox(key='show_history').set_value(True).run(); self.clean()
+        at.checkbox(key='show_history').set_value(False).run(); self.clean()
         self.assertEqual(at.session_state.draft,edited)
         # Changing the primary reference cannot overwrite the draft either.
         at.selectbox(key='reference_category').select('Standard').run(); self.clean()
@@ -351,7 +390,7 @@ class EditorTests(unittest.TestCase):
         with patch('streamlit.plotly_chart') as draw:
             at.checkbox(key='compare_second').uncheck().run(); self.clean()
         self.assertEqual(len(self.figures(draw.call_args_list)['plot_basal'].data),2)
-        self.assertEqual(at.session_state.draft,edited)
+        self.assertEqual(at.session_state.draft,dict(edited,version=3))
         at.text_area(key=f'notes_{epoch}').set_value('Single reference again').run()
         self.button('Save as new version').click().run(); self.clean()
         saved = load_profiles(self.folder.name)[0]
@@ -377,7 +416,7 @@ class EditorTests(unittest.TestCase):
             at.selectbox(key='reference_category').select('Other units').run(); self.clean()
         figures = self.figures(draw.call_args_list)
         self.assertEqual(len(figures['plot_isf'].data),2)
-        self.assertTrue(figures['plot_isf'].data[0].name.startswith('Reference 2'))
+        self.assertEqual(figures['plot_isf'].data[0].name,next(p['name'] for p in load_profiles(self.folder.name)[0] if p['id']==at.session_state.second_reference_id))
 
     def test_nightscout_load_is_manual_and_never_changes_profile(self):
         from test_nightscout import sample_data
@@ -390,29 +429,61 @@ class EditorTests(unittest.TestCase):
             at.text_input(key='ns_token').set_value('private-test-token')
             at.date_input(key='ns_from').set_value(loaded['first'])
             at.date_input(key='ns_until').set_value(loaded['last'])
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
             at.run(); self.clean()
             fetch.assert_not_called()
-            with patch('streamlit.plotly_chart') as draw:
+            at.session_state.editor_tab='I:C'
+            with patch('graph_view.render_graphs') as draw:
+                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
                 self.button('Load / refresh data').click().run(); self.clean()
             fetch.assert_called_once()
+            self.assertEqual(draw.call_count,1)  # Only the active metric builds a viewer.
             self.assertEqual(at.session_state.draft,before)
-            fig = self.figures(draw.call_args_list)['plot_basal']
-            self.assertEqual(fig.layout.xaxis.matches,'x2')
+            fig = draw.call_args_list[0].args[0][1]
+            self.assertIn('Glucose',fig.layout.title.text)
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
             at.radio(key='ns_mode').set_value('Median + band').run(); self.clean()
-            with patch('streamlit.plotly_chart') as draw:
+            with patch('graph_view.render_graphs') as draw:
+                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
                 at.multiselect(key='ns_layers').set_value(['Glucose','Temporary basal','Boluses','Carbs','IOB','COB']).run()
                 self.clean()
-            fig = self.figures(draw.call_args_list)['plot_ic']
+            fig = draw.call_args_list[0].args[0][1]
             self.assertTrue(any(t.name=='Median glucose' for t in fig.data))
             self.assertEqual(at.session_state.draft,before)
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+            at.selectbox(key='ns_overlay_ic').set_value('Glucose').run(); self.clean()
+            with patch('graph_view.render_graphs') as draw:
+                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+                at.button(key='ns_next_ic').click().run(); self.clean()
+            self.assertEqual(at.session_state.ns_mode,'One day')
+            self.assertEqual(at.session_state.ns_day,loaded['first'])
+            top=draw.call_args_list[0].args[0][0]
+            self.assertEqual(top.layout.yaxis2.side,'right')
+            self.assertTrue(any(t.yaxis=='y2' for t in top.data))
+            self.assertIn(str(loaded['first']),top.layout.title.text)
+            self.assertEqual(at.session_state.ns_overlay,'Glucose')
+            with patch('graph_view.render_graphs') as draw:
+                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+                at.toggle(key='ns_same_scale_ic').set_value(True).run(); self.clean()
+            top=draw.call_args_list[0].args[0][0]
+            self.assertEqual(list(top.layout.yaxis.range),list(top.layout.yaxis2.range))
+            self.assertTrue(at.session_state.ns_same_scale)
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+            at.button(key='ns_previous_ic').click().run(); self.clean()
+            self.assertEqual(at.session_state.ns_day,loaded['last'])
+            self.assertEqual(at.session_state.draft,before)
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
             self.button('Save as new version').click().run(); self.clean()
             fetch.assert_called_once()
             for p in Path(self.folder.name).glob('*.json'):
                 self.assertNotIn('private-test-token', p.read_text())
                 self.assertNotIn('ns_loaded', p.read_text())
-            at.radio(key='page').set_value('History').run(); self.clean()
-            at.radio(key='page').set_value('Editor').run(); self.clean()
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+            at.checkbox(key='show_history').set_value(True).run(); self.clean()
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+            at.checkbox(key='show_history').set_value(False).run(); self.clean()
             fetch.assert_called_once()
+            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
             at.text_input(key='tz_1').set_value('UTC').run(); self.clean()
             self.assertTrue(any('timezone changed' in w.value for w in at.warning))
 

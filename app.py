@@ -14,7 +14,7 @@ from appearance import COLORS, LIGHT_COLORS, palette, reference_color, sync_nati
 from comparison_tables import comparison_table, styled_comparison
 from editor_history import record_edit, reset_history, restore_edit
 from nightscout_charts import graph_figures
-from graph_view import render_graphs, navigation_bundle
+from graph_view import render_graphs, prepared_graphs
 from nightscout_ui import sidebar_controls, graph_date_controls
 
 from profiles import (METRICS, adjust_range, clock, daily_basal, differences,
@@ -145,7 +145,7 @@ for state_key in ('compare_second','second_reference_category','second_reference
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Nightscout-6")
+    st.caption("Build: Nightscout-7")
     st.caption("Create · compare · keep your history")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
@@ -254,7 +254,7 @@ if page in ("View", "Compare"):
     readonly_refs = [(f"Profile 2 · {profile_label(second_reference)} · {second_reference['name']}", second_reference, "", "dash")] if page == "Compare" and second_reference else []
     if page == "Compare" and not readonly_refs:
         st.info("Save or import a second profile to compare two saved versions.")
-    readonly_tabs = st.tabs(["Overview", "I:C", "ISF", "Basal", "Target"])
+    readonly_tabs = st.tabs(["Overview", "I:C", "ISF", "Basal", "Target"],key="readonly_tab",on_change="rerun")
     with readonly_tabs[0]:
         inspected = [(primary_label, reference)] + [(label, profile) for label, profile, *_ in readonly_refs]
         details = {label: pd.Series({"Category": profile['category'], "Version":str(profile['version']), "Name":profile['name'],
@@ -276,9 +276,10 @@ if page in ("View", "Compare"):
             st.dataframe(styled_comparison(frame, mask, dark), hide_index=True, width='stretch')
             fig = comparison_figure(reference['schedules'][metric], compatible, metric, unit_for(metric,reference), primary_label, reference.get('effective_date'), primary_name=reference['name'])
             if nightscout_view:
-                view = graph_date_controls(nightscout_view, metric)
-                render_graphs(graph_figures(fig, **view, unit=reference['overview']['glucose_unit'],dark=dark),dark,
-                              navigation_bundle(fig,view,reference['overview']['glucose_unit'],dark))
+                if tab.open:
+                    view = graph_date_controls(nightscout_view, metric)
+                    figures, navigation = prepared_graphs(fig,view,reference['overview']['glucose_unit'],dark)
+                    render_graphs(figures,dark,navigation,cache=nightscout_view['loaded'])
             else:
                 st.plotly_chart(fig,width='stretch',key=f'readonly_plot_{metric}')
     sync_native_theme(dark)
@@ -367,7 +368,7 @@ if st.session_state.get("notice"):
 summary = st.empty()
 edit_controls = st.empty()
 errors = []
-tabs = st.tabs(["Overview", "I:C", "ISF", "Basal", "Target"])
+tabs = st.tabs(["Overview", "I:C", "ISF", "Basal", "Target"],key="editor_tab",on_change="rerun")
 with tabs[0]:
     left, right = st.columns([1.3,1], gap="large")
     with left:
@@ -514,10 +515,10 @@ for tab, metric in zip(tabs[1:], METRICS):
             st.markdown("**Profile and recorded data**" if nightscout_view and nightscout_view["layers"] else "**Profile graph**")
             fig = comparison_figure(rows, matching_references, metric, unit)
             if nightscout_view:
-                graph_view = graph_date_controls(nightscout_view, metric)
-                figures = graph_figures(fig, **graph_view, unit=draft["overview"]["glucose_unit"], dark=dark)
-                navigation = navigation_bundle(fig, graph_view, draft["overview"]["glucose_unit"], dark)
-                render_graphs(figures, dark, navigation)
+                if tab.open:
+                    graph_view = graph_date_controls(nightscout_view, metric)
+                    figures, navigation = prepared_graphs(fig,graph_view,draft["overview"]["glucose_unit"],dark)
+                    render_graphs(figures,dark,navigation,cache=nightscout_view['loaded'])
             else:
                 st.plotly_chart(fig, width="stretch", key=f"plot_{metric}")
         else:

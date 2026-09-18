@@ -9,6 +9,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 from appearance import palette
+from chart_cache import cached
+from nightscout_stats import continuous_summary, hourly_events
 from nightscout import UTC, glucose_summary, local_points
 
 LAYERS = {"Glucose": "glucose", "Temporary basal": "basal", "Boluses": "bolus",
@@ -78,6 +80,11 @@ def interval_points(frame, zone, day):
 
 
 def dataset_traces(key, loaded, days, mode, unit, dark):
+    cache_key=(key,tuple(days),mode,unit,dark)
+    return cached(loaded,'traces',cache_key,lambda: _dataset_traces(key,loaded,days,mode,unit,dark),limit=48)
+
+
+def _dataset_traces(key, loaded, days, mode, unit, dark):
     data, zone = loaded['data'], loaded['zone']
     frame = data.get(key, pd.DataFrame())
     color = COLORS[key]
@@ -88,19 +95,28 @@ def dataset_traces(key, loaded, days, mode, unit, dark):
         frame = frame[frame['source'] == 'Temporary target']
     if frame.empty:
         return []
-    if key == 'glucose' and mode == 'Median + band':
-        stats = glucose_summary(frame, zone, days, unit)
-        if stats.empty:
-            return []
+    if mode == 'Median + band' and key in ('carbs','bolus'):
+        return []  # Event amounts belong in the hourly summaries, not a pile of markers.
+    if mode == 'Median + band' and key in ('glucose','iob','cob','basal','basal_percent'):
+        stats=cached(loaded,'summaries',(key,tuple(days),unit),lambda: continuous_summary(loaded,key,days,unit))
+        if stats.empty:return []
+        label={'glucose':'Glucose','iob':'IOB','cob':'COB','basal':'Temp basal','basal_percent':'Temp basal %'}[key]
+        sample_unit={'glucose':unit,'iob':'U','cob':'g','basal':'U/h','basal_percent':'% field'}[key]
         return [
-            go.Scatter(x=stats.minute, y=stats.low, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'),
-            go.Scatter(x=stats.minute, y=stats.high, mode='lines', line=dict(width=0), fill='tonexty',
-                       fillcolor=rgba(color,.18), name='Glucose 25–75% band', hoverinfo='skip'),
-            go.Scatter(x=stats.minute, y=stats['median'], mode='lines', name='Median glucose',
-                       line=dict(color=color,width=2.5), customdata=stats['days'], meta=dict(label='Median glucose',unit=unit,kind='median'), connectgaps=False,
-                       hovertemplate='%{y:.2f} '+unit+'<br>%{customdata:.0f} days in this 5-minute bin<extra>Median</extra>')]
+            go.Scatter(x=stats.minute.tolist(), y=stats.low.tolist(), mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'),
+            go.Scatter(x=stats.minute.tolist(), y=stats.high.tolist(), mode='lines', line=dict(width=0), fill='tonexty',
+                       fillcolor=rgba(color,.18), name=label+' 25–75%', hoverinfo='skip'),
+            go.Scatter(x=stats.minute.tolist(), y=stats['median'].tolist(), mode='lines', name='Median '+label.lower() if key=='glucose' else 'Median '+label,
+                       line=dict(color=color,width=2.5,shape='hv' if key in ('basal','basal_percent','cob') else 'linear',dash='solid'),
+                       fill='tozeroy' if key!='glucose' else None,fillcolor=rgba(color,.12),
+                       customdata=stats['days'].tolist(), meta=dict(label='Median '+label,unit=sample_unit,kind='median',dataset=key), connectgaps=False,
+                       hovertemplate='%{y:.3g} '+sample_unit+'<br>%{customdata:.0f} contributing days<extra>Median</extra>')]
     traces = []
     sample_unit = {'glucose':unit,'basal':'U/h','basal_percent':'% field','bolus':'U','iob':'U','carbs':'g','cob':'g','target':unit}[key]
+    point_days = {}
+    if key not in ("target","basal","basal_percent"):
+        points = local_points(frame,zone,days)
+        point_days = dict(tuple(points.groupby("day",sort=False))) if not points.empty else {}
     for index, day in enumerate(days):
         dash = DASHES[index % len(DASHES)]
         name = {'glucose':'Glucose','basal':'Temp basal','basal_percent':'Temp basal %',
@@ -140,7 +156,7 @@ def dataset_traces(key, loaded, days, mode, unit, dark):
             xs,ys,labels = interval_points(frame,zone,day)
             groups = [(name,xs,ys,labels)]
         else:
-            points = local_points(frame,zone,[day])
+            points = point_days.get(day, pd.DataFrame(columns=["label"]))
             groups = []
             subsets = [(label,part) for label,part in points.groupby('label',sort=False)] if key=='bolus' else [(name,points)]
             for group, part in subsets:
@@ -223,7 +239,7 @@ def glucose_axis(fig, loaded, days, unit, secondary=False, fixed_band=True):
                                  yaxis='y2' if secondary else 'y'))
 
 
-def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False):
+def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False):
     """Return a pinned profile figure followed by independent, time-aligned panels."""
     dates=date_label(days)
     title=profile_figure.layout.title.text or 'Profile'
@@ -264,10 +280,18 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         top.update_yaxes(range=limits,autorange=False)
         top.update_yaxes(matches='y',secondary_y=True)
     top.update_layout(uirevision=profile_figure.layout.uirevision)
+    if profile_only:
+        compact_legend(top)
+        return [top]
     selected={LAYERS[label] for label in layers}
     groups=[(['glucose'],'Glucose',unit),(['basal'],'Temp basal','U/h'),
             (['iob','bolus'],'IOB & boluses','U'),(['cob','carbs'],'COB & carbs','g'),
             (['target'],'Temp targets',unit)]
+    summary_layout = summary_layout or mode == 'Median + band'
+    if summary_layout:
+        groups=[(['glucose'],'Glucose',unit),(['basal'],'Temp basal','U/h'),
+                (['iob'],'Median IOB' if mode=='Median + band' else 'IOB','U'),
+                (['cob'],'Median COB' if mode=='Median + band' else 'COB','g'),(['target'],'Temp targets',unit)]
     figures=[top]
     if 'basal' in selected and not loaded['data']['basal_percent'].empty:
         groups.insert(2,(['basal_percent'],'Temp basal %','% field'))
@@ -290,6 +314,37 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         if not has_records:
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
         figures.append(fig)
+    if summary_layout:
+        figures.extend(hourly_figure(loaded,key,days,dark) for key in ("bolus","carbs"))
     for figure in figures:
         compact_legend(figure)
     return figures
+
+
+def hourly_figure(loaded, key, days, dark):
+    stats=cached(loaded,'hourly',(key,tuple(days)),lambda: hourly_events(loaded,key,days))
+    label,unit=('Boluses','U') if key=='bolus' else ('Carbs','g')
+    color=COLORS[key];theme=palette(dark)
+    fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.68,.32],vertical_spacing=.14)
+    details=[[[day,f'{hour:02}:00–{hour+1:02}:00',value,stats['counts'][i][hour],stats['status'][i][hour],stats['complete'][i][hour]]
+              for hour,value in enumerate(row)] for i,(day,row) in enumerate(zip(stats['days'],stats['values']))]
+    fig.add_trace(go.Heatmap(x=[30+60*h for h in range(24)],y=stats['days'],z=stats['values'],customdata=details,
+        colorscale=[[0,theme['surface']],[1,color]],zmin=0,xgap=1,ygap=1,hoverongaps=False,
+        colorbar=dict(title=dict(text=unit),len=.6,y=.7,thickness=10),
+        name=label+' hourly',meta=dict(kind='hourly_heatmap',label=label,unit=unit,dataset=key),
+        hovertemplate='%{customdata[0]} · %{customdata[1]}<br>%{z:.3g} '+unit+' · %{customdata[3]} events<extra></extra>'),row=1,col=1)
+    fig.add_trace(go.Bar(x=[30+60*h for h in range(24)],y=stats['median'],width=55,marker_color=color,
+        customdata=stats['contributing'],name='Median hourly '+label.lower(),showlegend=False,
+        meta=dict(kind='hourly_histogram',label='Median hourly '+label.lower(),unit=unit,dataset=key),
+        hovertemplate='%{y:.3g} '+unit+'<br>%{customdata} complete days<extra></extra>'),row=2,col=1)
+    height=min(540,max(290,205+len(days)*14))
+    style_figure(fig,f'{label} hourly · {date_label(days)}','Date',loaded['zone'],dark,height=height)
+    fig.update_layout(showlegend=False,margin=dict(l=90,r=64,t=40,b=36))
+    fig.update_xaxes(range=[0,1440],tickvals=list(range(0,1441,240)),ticktext=[f'{x//60:02}:00' for x in range(0,1441,240)])
+    fig.update_xaxes(matches='x',row=2,col=1)
+    fig.update_yaxes(type='category',autorange='reversed',title_text='Date',tickfont_size=11,row=1,col=1)
+    fig.update_yaxes(title_text='Median '+unit,rangemode='tozero',row=2,col=1)
+    fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key)
+    if all(v is None for row in stats['values'] for v in row):
+        fig.add_annotation(text='No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)
+    return fig

@@ -39,6 +39,7 @@ def sidebar_controls(profile_zone):
         if loaded is None:
             st.caption("Only Load / refresh data contacts Nightscout. Loaded records and credentials are not saved with profiles.")
             return None
+        loaded.setdefault("_chart_cache", {})
         if st.button("Clear loaded Nightscout data"):
             del st.session_state.ns_loaded
             st.rerun()
@@ -61,7 +62,7 @@ def sidebar_controls(profile_zone):
             if (key not in loaded["data"] or loaded["data"][key].empty) and (key != "basal" or loaded["data"]["basal_percent"].empty):
                 st.caption(f"No {label.lower()} records were returned for the loaded dates.")
         if mode == "Median + band":
-            st.caption("Glucose: median and 25–75% band in 5-minute bins, with equal weight per day. Other panels show each selected day separately.")
+            st.caption("Glucose, temp basal, IOB and COB: median and 25–75% band in 5-minute bins, with one contribution per day. Missing intervals stay blank. Temp basal summarizes recorded temp rates only. Bolus and carb heatmaps show hourly totals; histograms show the median hourly total across complete hours. Zero means no event returned; unavailable and future hours stay blank.")
         st.caption("Only temporary-target events are drawn; scheduled profile targets are hidden. Reason colors: Eating Soon orange, Activity cyan, Hypo red, other/missing green. The 4–10 band is a fixed guide.")
         st.caption("Temporary basal shows recorded intervals, not a reconstructed delivery total. Gaps are not filled with your draft basal. IOB/COB are uploaded values.")
         st.caption("Select historical days manually; they are not automatically matched to profile versions. Editing your profile never changes the recorded data.")

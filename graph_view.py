@@ -2,11 +2,13 @@
 from functools import lru_cache
 from datetime import timedelta
 import json
+import hashlib
 
 from plotly.offline import get_plotlyjs
 import streamlit as st
 
 from appearance import palette
+from chart_cache import cached
 from nightscout import daily_summary
 from nightscout_charts import graph_figures, OVERLAY_CHOICES
 
@@ -21,10 +23,10 @@ def navigation_bundle(profile, view, unit, dark):
     days = [loaded['first']+timedelta(days=i) for i in range((loaded['last']-loaded['first']).days+1)]
     # One batch of dated traces lets the browser filter locally without an app
     # rerun, which would destroy fullscreen. No tokens or server URLs are sent.
-    daily = graph_figures(profile, **dict(view, days=days, mode='One day'), unit=unit, dark=dark)
+    daily = graph_figures(profile, **dict(view, days=days, mode='One day',summary_layout=view['mode']=='Median + band'), unit=unit, dark=dark)
     overlays = {}
     for option in OVERLAY_CHOICES:
-        options = dict(view, layers=[], overlay=option)
+        options = dict(view, layers=[], overlay=option,profile_only=True)
         # Initial variants preserve median/multiple-day mode; daily variants
         # support local date navigation without requests or leaving fullscreen.
         initial_top = graph_figures(profile, **options, unit=unit, dark=dark)[0]
@@ -35,7 +37,20 @@ def navigation_bundle(profile, view, unit, dark):
                 mode=view['mode'], same_scale=view.get('same_scale',False), unit=unit,
                 glucose_overlay=view.get('overlay')=='Glucose', overlay=view.get('overlay','None'), overlays=overlays,
                 figures=[json.loads(fig.to_json()) for fig in daily],
-                summaries=daily_summary(loaded,days,unit))
+                summaries=cached(loaded,'daily_stats',(tuple(days),unit),lambda: daily_summary(loaded,days,unit)))
+
+
+def prepared_graphs(profile, view, unit, dark):
+    # The loaded snapshot is immutable until manual refresh. Profile edits only
+    # rebuild the viewer; recorded traces and statistics remain reusable.
+    key=(profile.to_json(),tuple(view['days']),view['mode'],tuple(view['layers']),
+         view.get('overlay','None'),view.get('show_targets',True),view.get('same_scale',False),unit,dark)
+    def build():
+        figures=graph_figures(profile,**view,unit=unit,dark=dark)
+        navigation=navigation_bundle(profile,view,unit,dark)
+        navigation['render_key']=hashlib.sha256(repr(key).encode()).hexdigest()
+        return figures,navigation
+    return cached(view['loaded'],'prepared',key,build,limit=3)
 
 
 def viewer_html(figures, dark, navigation=None):
@@ -128,6 +143,12 @@ function clearHover() {
 }
 function showHover(div,event) {
   const point=event.points && event.points[0];
+  if(point && point.data?.meta?.kind==='hourly_heatmap') {
+    const d=point.customdata;
+    if(!d || d[2]===null)return;
+    clearHover();card.textContent=point.data.meta.label+' · '+d[0]+' '+d[1]+' · '+number(d[2],3)+' '+point.data.meta.unit+' · '+d[3]+' events · '+d[4];
+    return;
+  }
   if(!point || !Number.isFinite(point.x) || !Number.isFinite(point.y))return;
   const trace=point.data, meta=trace.meta || {};
   const minute=Math.round(point.x), clock=String(Math.floor(minute/60)).padStart(2,'0')+':'+String(minute%60).padStart(2,'0');
@@ -136,7 +157,7 @@ function showHover(div,event) {
   card.replaceChildren();
   const parts=[label,value+(meta.unit?' '+meta.unit:''),(meta.date?meta.date+' · ':'')+clock];
   if(meta.kind==='target' && point.customdata)parts.push(String(point.customdata));
-  if(meta.kind==='median' && point.customdata)parts.push(point.customdata+' days');
+  if((meta.kind==='median' || meta.kind==='hourly_histogram') && point.customdata)parts.push(point.customdata+' contributing days');
   parts.forEach((text,i)=>{const el=document.createElement(i===1?'strong':'span');el.textContent=text;if(i>1)el.className='muted';card.appendChild(el);});
   // Plotly 6.9 supplies axis transforms with its hover event. Reusing them also
   // places highlights correctly on the secondary axis and after zoom/pan.
@@ -247,6 +268,22 @@ function dailyView(spec,index,day,range) {
   const layout=sizedLayout(clone,index);
   layout.title.text=layout.title.text.replace(/[0-9]{4}-[0-9]{2}-[0-9]{2}(?: – [0-9]{4}-[0-9]{2}-[0-9]{2}(?: · selected days)?)?/g,day);
   layout.xaxis.range=range;layout.xaxis.autorange=false;layout.annotations=[];
+  if(layout.meta?.kind==='hourly') {
+    const heat=data.find(t=>t.meta?.kind==='hourly_heatmap');
+    const bars=data.find(t=>t.meta?.kind==='hourly_histogram');
+    const row=heat.y.indexOf(day);
+    heat.y=[day];heat.z=row>=0?[heat.z[row]]:[Array(24).fill(null)];
+    heat.customdata=row>=0?[heat.customdata[row]]:[[]];
+    bars.y=heat.z[0].map((value,h)=>heat.customdata[0][h]?.[5]?value:null);
+    bars.customdata=bars.y.map(v=>v===null?0:1);
+    bars.name='Hourly '+heat.meta.label.toLowerCase();bars.meta.label=bars.name;
+    layout.yaxis.autorange='reversed';delete layout.yaxis.range;
+    layout.yaxis2.autorange=true;delete layout.yaxis2.range;
+    layout.yaxis2.title.text=heat.meta.unit;
+    if(heat.z[0].every(v=>v===null))layout.annotations=[{text:'No available treatment data',xref:'paper',yref:'paper',x:.5,y:.7,showarrow:false}];
+    return {data,layout};
+  }
+
   const recorded=data.filter(t=>t.meta?.date===day);
   const relevant=layout.title.text.startsWith('Glucose ·')?recorded.filter(t=>t.meta.kind==='glucose'):recorded;
   if(index>0 && !relevant.some(t=>Array.isArray(t.y) && t.y.some(v=>v!==null)))layout.annotations=[{text:'No recorded data for this day',xref:'paper',yref:'paper',x:.5,y:.5,showarrow:false}];
@@ -324,7 +361,8 @@ controls();startPlots();
 </script></body></html>""".replace('__VIEWER_PAYLOAD__',payload_json,1)
 
 
-def render_graphs(figures, dark, navigation=None):
+def render_graphs(figures, dark, navigation=None, cache=None):
     # A fixed profile plus a separately scrollable stack works on short screens
     # without a page-level overlay covering the editor or save controls.
-    st.iframe(viewer_html(figures,dark,navigation),height=720 if len(figures)>1 else 290,tab_index=0)
+    html = cached(cache,'html',(navigation['render_key'],dark),lambda: viewer_html(figures,dark,navigation),limit=3) if cache is not None and navigation and 'render_key' in navigation else viewer_html(figures,dark,navigation)
+    st.iframe(html,height=720 if len(figures)>1 else 290,tab_index=0)
