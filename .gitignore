@@ -1,0 +1,5 @@
+# Folders with personal data to ignore
+
+examples/
+data/
+test/
