@@ -1,0 +1,126 @@
+{
+  "schema_version": 1,
+  "name": "LenDrinking v17",
+  "category": "Drinking",
+  "parent_id": "ba217ca9-a56b-44f6-8c7b-45af389431a3",
+  "effective_date": "2026-09-15",
+  "notes": "First added profile",
+  "overview": {
+    "dia_hours": 8.5,
+    "glucose_unit": "mmol/L",
+    "timezone": "Europe/Amsterdam",
+    "extra": {}
+  },
+  "schedules": {
+    "ic": [
+      {
+        "time": "00:00",
+        "value": 10.3
+      },
+      {
+        "time": "06:00",
+        "value": 9.5
+      },
+      {
+        "time": "11:00",
+        "value": 9.1
+      },
+      {
+        "time": "15:00",
+        "value": 9.1
+      },
+      {
+        "time": "17:00",
+        "value": 8.6
+      },
+      {
+        "time": "21:00",
+        "value": 8.3
+      }
+    ],
+    "isf": [
+      {
+        "time": "00:00",
+        "value": 6.5
+      },
+      {
+        "time": "06:00",
+        "value": 5.0
+      },
+      {
+        "time": "11:00",
+        "value": 7.0
+      },
+      {
+        "time": "17:00",
+        "value": 5.5
+      },
+      {
+        "time": "20:00",
+        "value": 6.0
+      }
+    ],
+    "basal": [
+      {
+        "time": "00:00",
+        "value": 0.8
+      },
+      {
+        "time": "04:00",
+        "value": 0.6
+      },
+      {
+        "time": "08:00",
+        "value": 0.8
+      },
+      {
+        "time": "11:00",
+        "value": 0.8
+      },
+      {
+        "time": "15:00",
+        "value": 0.6
+      },
+      {
+        "time": "17:00",
+        "value": 0.8
+      },
+      {
+        "time": "20:00",
+        "value": 0.8
+      },
+      {
+        "time": "22:00",
+        "value": 0.8
+      }
+    ],
+    "target": [
+      {
+        "time": "00:00",
+        "low": 7.1,
+        "high": 7.1
+      },
+      {
+        "time": "01:00",
+        "low": 7.1,
+        "high": 7.1
+      },
+      {
+        "time": "07:00",
+        "low": 6.6,
+        "high": 6.6
+      }
+    ]
+  },
+  "source": {
+    "format": "xlsx",
+    "sheet": "Sheet1",
+    "filename": "example data profile diabetes.xlsx"
+  },
+  "linked_profile_id": "ba217ca9-a56b-44f6-8c7b-45af389431a3",
+  "id": "f5b694b3-9520-4475-a939-ef7d0efe8e9d",
+  "version": 1,
+  "created_at": "2026-09-17T21:08:39.385534+00:00",
+  "comparison_id": "ba217ca9-a56b-44f6-8c7b-45af389431a3",
+  "second_comparison_id": null
+}
