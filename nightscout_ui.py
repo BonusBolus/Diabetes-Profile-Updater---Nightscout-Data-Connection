@@ -5,8 +5,64 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import streamlit as st
 
-from nightscout import NightscoutError, load_nightscout
+from nightscout import NightscoutError, available_days, load_nightscout
 from nightscout_charts import LAYERS, OVERLAYS, OVERLAY_CHOICES, date_label
+
+WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _select_single_day(day):
+    st.session_state.ns_day = day
+
+
+def _toggle_selected_day(day):
+    selected = set(st.session_state.get("ns_days", []))
+    if day in selected:
+        if len(selected) > 1:
+            selected.discard(day)
+    else:
+        selected.add(day)
+    st.session_state.ns_days = sorted(selected)
+
+
+def calendar_picker(days, mode, available):
+    """A clickable Mon–Sun calendar grid; dots mark days with recorded data."""
+    days_set = set(days)
+    start = days[0] - timedelta(days=days[0].weekday())
+    end = days[-1] + timedelta(days=6 - days[-1].weekday())
+    grid = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+    for col, label in zip(st.columns(7), WEEKDAYS):
+        col.markdown(f"<div style='text-align:center;font-size:11px;opacity:.6;font-weight:600'>{label}</div>",
+                     unsafe_allow_html=True)
+    if mode == "One day":
+        current = st.session_state.get("ns_day", days[-1])
+        if current not in days_set:
+            current = days[-1]
+    else:
+        current = set(st.session_state.get("ns_days", days)) & days_set or days_set
+    for week_start in range(0, len(grid), 7):
+        for col, day in zip(st.columns(7), grid[week_start:week_start + 7]):
+            if day not in days_set:
+                col.markdown("&nbsp;")
+                continue
+            has_data = day in available
+            selected = day == current if mode == "One day" else day in current
+            label = f"{day.day} ·" if has_data else str(day.day)
+            help_text = day.isoformat() + (" · has recorded data" if has_data else " · no recorded data")
+            if mode == "One day":
+                col.button(label, key=f"ns_cal_{day.isoformat()}", width="stretch", help=help_text,
+                          type="primary" if selected else "secondary", on_click=_select_single_day, args=(day,))
+            else:
+                col.button(label, key=f"ns_cal_{day.isoformat()}", width="stretch", help=help_text,
+                          type="primary" if selected else "secondary", on_click=_toggle_selected_day, args=(day,))
+    if mode != "One day":
+        if st.button("Select all days", key="ns_cal_select_all", width="stretch"):
+            st.session_state.ns_days = list(days)
+            st.rerun()
+        st.caption("· marks a day with recorded Nightscout data.")
+    if mode == "One day":
+        return [st.session_state.get("ns_day", days[-1]) if st.session_state.get("ns_day", days[-1]) in days_set else days[-1]]
+    return sorted(set(st.session_state.get("ns_days", days)) & days_set) or list(days)
 
 
 def sidebar_controls(profile_zone):
@@ -50,13 +106,14 @@ def sidebar_controls(profile_zone):
                 st.warning(warning)
         days = [loaded["first"]+timedelta(days=i) for i in range((loaded["last"]-loaded["first"]).days+1)]
         mode = st.radio("Nightscout view", ["One day", "Multiple days", "Median + band"], key="ns_mode")
-        if mode == "One day":
-            days = [st.selectbox("Day to display", days, index=len(days)-1, key="ns_day")]
-        else:
-            days = st.multiselect("Days to display", days, default=days, key="ns_days")
-        layers = st.multiselect("Data layers", list(LAYERS), default=["Glucose"], key="ns_layers")
+        st.caption("Days to display" if mode != "One day" else "Day to display")
+        days = calendar_picker(days, mode, available_days(loaded))
+        layers = st.pills("Data layers", list(LAYERS), selection_mode="multi", default=["Glucose"], key="ns_layers")
         overlay = st.session_state.get("ns_overlay", "None")
         show_targets = st.checkbox("Show temporary targets on glucose", value=True, key="ns_show_targets")
+        exclude_smb = st.checkbox("Exclude SMB from bolus grid/histogram", value=False, key="ns_exclude_smb",
+            help="Hide automated micro-boluses (SMB) from the bolus day×hour heatmap and its hourly "
+                 "histogram. User boluses on other bolus displays are unaffected.")
         for label in set(layers):
             key = LAYERS[label]
             if (key not in loaded["data"] or loaded["data"][key].empty) and (key != "basal" or loaded["data"]["basal_percent"].empty):
@@ -66,7 +123,8 @@ def sidebar_controls(profile_zone):
         st.caption("Only temporary-target events are drawn; scheduled profile targets are hidden. Reason colors: Eating Soon orange, Activity cyan, Hypo red, other/missing green. The 4–10 band is a fixed guide.")
         st.caption("Temporary basal shows recorded intervals, not a reconstructed delivery total. Gaps are not filled with your draft basal. IOB/COB are uploaded values.")
         st.caption("Select historical days manually; they are not automatically matched to profile versions. Editing your profile never changes the recorded data.")
-        return {"loaded": loaded, "days": sorted(days), "mode": mode, "layers": layers, "overlay": overlay, "show_targets": show_targets}
+        return {"loaded": loaded, "days": sorted(days), "mode": mode, "layers": layers, "overlay": overlay,
+                "show_targets": show_targets, "exclude_smb": exclude_smb}
 
 
 def cycle_day(direction):

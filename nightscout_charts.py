@@ -51,6 +51,16 @@ def rgba(color, alpha):
     return f"rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},{alpha})"
 
 
+def padded_range(values, pad=.18):
+    """A y-range with headroom above the data instead of a tight autorange."""
+    finite = [float(v) for v in values if v is not None and pd.notna(v)]
+    if not finite:
+        return None
+    low, high = min(0., min(finite)), max(finite)
+    span = max(high - low, 1e-9)
+    return [low - .4*pad*span if low < 0 else 0, high + pad*span]
+
+
 def interval_points(frame, zone, day):
     """Clip intervals to a local day; do not bridge gaps or DST clock jumps."""
     tz = ZoneInfo(zone)
@@ -228,7 +238,7 @@ def glucose_axis(fig, loaded, days, unit, secondary=False, fixed_band=True):
     points=local_points(loaded['data']['glucose'],loaded['zone'],days)
     scale=1 if unit=='mmol/L' else 18
     peak=points['value'].max()/18*scale if not points.empty else 0
-    maximum=max(20*scale, math.ceil(peak*1.05/scale)*scale if peak>20*scale else 20*scale)
+    maximum=max(20*scale, math.ceil(peak*1.15/scale)*scale if peak>20*scale else 20*scale)
     axis='yaxis2' if secondary else 'yaxis'
     fig.update_layout(**{axis:dict(range=[0,maximum],autorange=False)})
     if fixed_band:
@@ -239,7 +249,7 @@ def glucose_axis(fig, loaded, days, unit, secondary=False, fixed_band=True):
                                  yaxis='y2' if secondary else 'y'))
 
 
-def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False):
+def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False, exclude_smb=False):
     """Return a pinned profile figure followed by independent, time-aligned panels."""
     dates=date_label(days)
     title=profile_figure.layout.title.text or 'Profile'
@@ -276,7 +286,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
                 bounds.extend(axis.range)
         low,high=min(bounds),max(bounds)
         span=max(high-low,1)
-        limits=[low-.05*span if low<0 else 0,high+.08*span]
+        limits=[low-.08*span if low<0 else 0,high+.15*span]
         top.update_yaxes(range=limits,autorange=False)
         top.update_yaxes(matches='y',secondary_y=True)
     top.update_layout(uirevision=profile_figure.layout.uirevision)
@@ -313,17 +323,23 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         style_figure(fig,f'{label} · {dates}',ylabel,loaded['zone'],dark)
         if not has_records:
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
+        elif 'glucose' not in active:
+            rng=padded_range([y for trace in fig.data for y in trace.y])
+            if rng:
+                fig.update_yaxes(range=rng,autorange=False)
         figures.append(fig)
     if summary_layout:
-        figures.extend(hourly_figure(loaded,key,days,dark) for key in ("bolus","carbs"))
+        figures.extend(hourly_figure(loaded,key,days,dark,exclude_smb=exclude_smb and key=='bolus') for key in ("bolus","carbs"))
     for figure in figures:
         compact_legend(figure)
     return figures
 
 
-def hourly_figure(loaded, key, days, dark):
-    stats=cached(loaded,'hourly',(key,tuple(days)),lambda: hourly_events(loaded,key,days))
+def hourly_figure(loaded, key, days, dark, exclude_smb=False):
+    stats=cached(loaded,'hourly',(key,tuple(days),exclude_smb),lambda: hourly_events(loaded,key,days,exclude_smb))
     label,unit=('Boluses','U') if key=='bolus' else ('Carbs','g')
+    if exclude_smb:
+        label='Boluses (excl. SMB)'
     color=COLORS[key];theme=palette(dark)
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.68,.32],vertical_spacing=.14)
     details=[[[day,f'{hour:02}:00–{hour+1:02}:00',value,stats['counts'][i][hour],stats['status'][i][hour],stats['complete'][i][hour]]
@@ -344,6 +360,9 @@ def hourly_figure(loaded, key, days, dark):
     fig.update_xaxes(matches='x',row=2,col=1)
     fig.update_yaxes(type='category',autorange='reversed',title_text='Date',tickfont_size=11,row=1,col=1)
     fig.update_yaxes(title_text='Median '+unit,rangemode='tozero',row=2,col=1)
+    rng=padded_range(stats['median'])
+    if rng:
+        fig.update_yaxes(range=rng,autorange=False,row=2,col=1)
     fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key)
     if all(v is None for row in stats['values'] for v in row):
         fig.add_annotation(text='No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)

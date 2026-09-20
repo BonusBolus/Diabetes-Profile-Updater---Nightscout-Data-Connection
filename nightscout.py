@@ -281,6 +281,18 @@ def load_nightscout(url, token, first, last, zone):
             "availability": {"glucose": True, "treatments": treatments_available}}
 
 
+def available_days(loaded):
+    """Local calendar dates that have any recorded glucose/treatment/derived data."""
+    zone = loaded["zone"]
+    present = set()
+    for frame in loaded["data"].values():
+        if frame is None or frame.empty or "time" not in frame.columns:
+            continue
+        times = pd.to_datetime(frame["time"], utc=True).dt.tz_convert(zone)
+        present.update(times.dt.date.tolist())
+    return present
+
+
 def local_points(frame, zone, days):
     if frame.empty:
         return pd.DataFrame(columns=["day", "minute", "time", "value", "label"])
