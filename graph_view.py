@@ -44,8 +44,7 @@ def prepared_graphs(profile, view, unit, dark):
     # The loaded snapshot is immutable until manual refresh. Profile edits only
     # rebuild the viewer; recorded traces and statistics remain reusable.
     key=(profile.to_json(),tuple(view['days']),view['mode'],tuple(view['layers']),
-         view.get('overlay','None'),view.get('show_targets',True),view.get('same_scale',False),
-         view.get('exclude_smb',False),unit,dark)
+         view.get('overlay','None'),view.get('show_targets',True),view.get('same_scale',False),unit,dark)
     def build():
         figures=graph_figures(profile,**view,unit=unit,dark=dark)
         navigation=navigation_bundle(profile,view,unit,dark)
@@ -291,13 +290,13 @@ function dailyView(spec,index,day,range) {
   const isGlucose=index===0?currentOverlay==='Glucose':layout.title.text.startsWith('Glucose ·');
   const scale=navigation.unit==='mmol/L'?1:18;
   let peak=0;data.filter(t=>t.meta?.kind==='glucose').forEach(t=>t.y.forEach(y=>{if(y!==null)peak=Math.max(peak,y);}));
-  const maximum=Math.max(20*scale,peak>20*scale?Math.ceil(peak*1.15/scale)*scale:20*scale);
+  const maximum=Math.max(20*scale,peak>20*scale?Math.ceil(peak*1.05/scale)*scale:20*scale);
   [layout.yaxis,layout.yaxis2].filter(Boolean).forEach(axis=>{delete axis.range;axis.autorange=true;delete axis.matches;});
   if(isGlucose){const axis=index===0?layout.yaxis2:layout.yaxis;axis.range=[0,maximum];axis.autorange=false;}
   if(index===0 && navigation.same_scale && layout.yaxis2){
     let low=0,high=isGlucose?maximum:0;
     data.forEach(t=>{if(Array.isArray(t.y))t.y.forEach(y=>{if(Number.isFinite(y)){low=Math.min(low,y);high=Math.max(high,y);}});});
-    const span=Math.max(high-low,1),limits=[low<0?low-.08*span:0,high+.15*span];
+    const span=Math.max(high-low,1),limits=[low<0?low-.05*span:0,high+.08*span];
     layout.yaxis.range=limits;layout.yaxis2.range=limits;layout.yaxis.autorange=false;layout.yaxis2.autorange=false;layout.yaxis2.matches='y';
   }
   layout.uirevision=day+':'+currentOverlay;
