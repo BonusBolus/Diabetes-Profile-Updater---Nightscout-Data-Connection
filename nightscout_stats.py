@@ -31,7 +31,7 @@ def continuous_summary(loaded, key, days, unit):
     return pd.DataFrame(dict(median=groups.median(),low=groups.quantile(.25),high=groups.quantile(.75),days=groups.count())).reindex(range(0,1440,5)).rename_axis('minute').reset_index()
 
 
-def hourly_events(loaded,key,days):
+def hourly_events(loaded,key,days,exclude_smb=False):
     """Recorded totals per local day/hour; histogram uses complete hours only.
 
     DST repeated hours are combined; nonexistent hours remain blank. Partial
@@ -39,6 +39,9 @@ def hourly_events(loaded,key,days):
     """
     days=sorted(set(days));zone=loaded['zone'];tz=ZoneInfo(zone)
     points=local_points(loaded['data'].get(key,pd.DataFrame()),zone,days)
+    if exclude_smb and key == 'bolus' and 'label' in points:
+        # Only explicit SMB classification; retain unknown and user boluses.
+        points=points[points['label'].fillna('').str.strip().str.casefold() != 'smb']
     if not points.empty:
         points=points[points['time']<loaded['loaded_at']].copy()
         points['hour']=(points['minute']//60).astype(int)

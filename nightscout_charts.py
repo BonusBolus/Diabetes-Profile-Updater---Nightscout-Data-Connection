@@ -79,6 +79,71 @@ def interval_points(frame, zone, day):
     return xs, ys, labels
 
 
+
+def temporary_target_traces(frame, zone, day, unit, dark):
+    """Independent rectangles: no inter-trace fill or bridges across temp events."""
+    tz=ZoneInfo(zone)
+    start=datetime.combine(day,time.min,tz).astimezone(UTC)
+    end=datetime.combine(day+timedelta(days=1),time.min,tz).astimezone(UTC)
+    part=frame[(frame['time']<end) & (frame['end']>start)].copy()
+    if part.empty:return []
+    part['reason']=part.get('reason',pd.Series('',index=part.index)).fillna('')
+    part['color_reason']=part['reason'].map(target_reason)
+    scale=18 if unit=='mmol/L' else 1
+    traces=[]
+    for reason,group in part.groupby('color_reason',sort=False):
+        color=TARGET_COLORS[reason] if dark else {'Eating Soon':'#bf7100','Activity':'#008b9c','Hypo':'#cc2727','Custom':'#24843b'}[reason]
+        fill_x,fill_y,side_x,side_y=[],[],[],[]
+        lines={field:dict(x=[],y=[],details=[]) for field in ('low','high')}
+        for row in group.to_dict('records'):
+            base_low,base_high=row.get('profile_low'),row.get('profile_high')
+            known=pd.notna(base_low) and pd.notna(base_high)
+            details=str(row['reason'] or 'Unspecified')
+            if known:
+                details+=f" · Historical profile target {base_low/scale:g}–{base_high/scale:g} {unit}"
+            else:
+                details+=' · Historical profile target unavailable'
+            for field in ('low','high'):
+                xs,ys,_=interval_points(pd.DataFrame([dict(row,value=row[field])]),zone,day)
+                lines[field]['x'].extend(xs)
+                lines[field]['y'].extend(y/scale if y is not None else None for y in ys)
+                lines[field]['details'].extend([details]*len(xs))
+            if not known:
+                continue  # Never substitute the draft, reference, zero or fixed 4–10 band.
+            low,high=row['low'],row['high']
+            if low>base_high: low=base_high
+            elif high<base_low: high=base_low
+            if low==high:continue
+            # interval_points splits midnight and DST clock jumps. Close each
+            # visible polygon explicitly; toself fills each None-separated segment.
+            segment=[]
+            for x in xs:
+                if x is not None:
+                    segment.append(x)
+                elif segment:
+                    a,b=segment[0],segment[-1]
+                    if a<b:
+                        bottom,top=low/scale,high/scale
+                        fill_x.extend([a,b,b,a,a,None]);fill_y.extend([bottom,bottom,top,top,bottom,None])
+                        side_x.extend([a,a,None,b,b,None]);side_y.extend([bottom,top,None,bottom,top,None])
+                    segment=[]
+        meta=dict(unit=unit,date=str(day),legend_entry=False)
+        if fill_x:
+            traces.append(go.Scatter(x=fill_x,y=fill_y,mode='lines',line=dict(width=0),fill='toself',
+                fillcolor=rgba(color,.12),hoverinfo='skip',connectgaps=False,showlegend=False,
+                legendgroup=f'target-{reason}',name='Temp target shading',meta=dict(meta,kind='target_fill')))
+            traces.append(go.Scatter(x=side_x,y=side_y,mode='lines',line=dict(color=color,width=1,dash='dot'),
+                hoverinfo='skip',connectgaps=False,showlegend=False,legendgroup=f'target-{reason}',
+                name='Temp target sides',meta=dict(meta,kind='target_boundary')))
+        for field,values in lines.items():
+            traces.append(go.Scatter(x=values['x'],y=values['y'],customdata=values['details'],
+                name='Temp target · '+reason,meta=dict(meta,label='Temporary target '+field,kind='target',legend_entry=field=='high'),
+                legendgroup=f'target-{reason}',showlegend=field=='high',mode='lines',
+                line=dict(color=color,shape='hv',width=2,dash='solid'),fill='none',connectgaps=False,
+                hovertemplate='%{y:.2f} '+unit+'<br>%{customdata}<extra></extra>'))
+    return traces
+
+
 def dataset_traces(key, loaded, days, mode, unit, dark):
     cache_key=(key,tuple(days),mode,unit,dark)
     return cached(loaded,'traces',cache_key,lambda: _dataset_traces(key,loaded,days,mode,unit,dark),limit=48)
@@ -122,35 +187,7 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
         name = {'glucose':'Glucose','basal':'Temp basal','basal_percent':'Temp basal %',
                 'bolus':'Bolus','iob':'IOB','carbs':'Carbs','cob':'COB','target':'Nightscout target'}[key]
         if key == 'target':
-            # Split only the color groups, preserving explicit gaps between
-            # intervals and separate low/high traces for each filled band.
-            colored = frame.copy()
-            colored['reason'] = colored.get('reason', pd.Series('',index=colored.index)).fillna('')
-            colored['color_reason'] = colored['reason'].map(target_reason)
-            for (source, reason), part in colored.groupby(['source','color_reason'],sort=False):
-                target_color = TARGET_COLORS[reason]
-                if not dark:
-                    target_color = {'Eating Soon':'#bf7100','Activity':'#008b9c','Hypo':'#cc2727','Custom':'#24843b'}[reason]
-                label = source + (' · '+reason if source == 'Temporary target' else '')
-                for field in ('low','high'):
-                    values = part.rename(columns={field:'value'}).drop(columns=['high' if field=='low' else 'low'])
-                    xs,ys,labels = interval_points(values,zone,day)
-                    if not xs:
-                        continue
-                    ys = [y/18 if unit=='mmol/L' and y is not None else y for y in ys]
-                    # Reason is retained even for custom or uploader-specific text.
-                    details=[]
-                    for row in part.to_dict('records'):
-                        one = pd.DataFrame([dict(row,value=row[field])])
-                        rx,_,_ = interval_points(one,zone,day)
-                        text = str(row.get('reason') or 'Unspecified') if source=='Temporary target' else ''
-                        details.extend([text]*len(rx))
-                    traces.append(go.Scatter(x=xs,y=ys,customdata=details,name='Temp target · '+reason,
-                        meta=dict(label=source+' '+field,unit=unit,date=str(day),kind='target',legend_entry=field=='high'),
-                        legendgroup=f'target-{reason}',showlegend=field=='high',mode='lines',
-                        line=dict(color=target_color,shape='hv',width=2,dash='solid'),
-                        fill='tonexty' if field=='high' else None,fillcolor=rgba(target_color,.16),connectgaps=False,
-                        hovertemplate='%{y:.2f} '+unit+'<extra>'+escape(label)+'</extra>'))
+            traces.extend(temporary_target_traces(frame,zone,day,unit,dark))
             continue
         if key in ('basal','basal_percent'):
             xs,ys,labels = interval_points(frame,zone,day)
@@ -186,7 +223,7 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
             traces.append(go.Scatter(x=xs,y=ys,customdata=labels,name=group,
                 meta=dict(label=group,unit=sample_unit,date=str(day),kind=key,legend_entry=True),
                 text=[f'{y:g} {sample_unit}' if y is not None else '' for y in ys] if amount_labels else None,
-                textposition='top center',textfont=dict(size=12,color=color),cliponaxis=True,
+                textposition='top center',textfont=dict(size=12,color=color),cliponaxis=not amount_labels,
                 legendgroup=group,mode='markers+text' if amount_labels else 'markers' if key in ('carbs','bolus') else 'lines+markers' if key=='glucose' else 'lines',
                 line=dict(color=color,width=2,dash='solid' if key in ('iob','cob') else dash,shape='hv' if key.startswith('basal') or key=='cob' else 'linear'),
                 marker=dict(color=marker_color,symbol=symbol,size=sizes,
@@ -209,7 +246,7 @@ def compact_legend(fig):
             seen.add(group)
 
 
-def style_figure(fig, title, ylabel, zone, dark, height=205):
+def style_figure(fig, title, ylabel, zone, dark, height=285):
     theme=palette(dark)
     fig.update_layout(title=dict(text=title,font=dict(size=16),x=.01),height=height,
         template='plotly_dark' if dark else 'plotly_white',paper_bgcolor=theme['background'],
@@ -263,7 +300,9 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         top.update_yaxes(title_text=overlay_unit,secondary_y=True,showgrid=False)
         if key=='glucose':
             glucose_axis(top,loaded,days,unit,secondary=True)
-    style_figure(top,title,profile_figure.layout.yaxis.title.text,loaded['zone'],dark,height=245)
+        elif key=='target':
+            top.update_yaxes(range=[0,20 if unit=='mmol/L' else 360],autorange=False,secondary_y=True)
+    style_figure(top,title,profile_figure.layout.yaxis.title.text,loaded['zone'],dark,height=310)
     top.layout.yaxis.rangemode = profile_figure.layout.yaxis.rangemode or 'normal'
     if overlay!='None':
         top.update_yaxes(showgrid=False,secondary_y=True)
@@ -276,11 +315,15 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
                 bounds.extend(axis.range)
         low,high=min(bounds),max(bounds)
         span=max(high-low,1)
-        limits=[low-.05*span if low<0 else 0,high+.08*span]
+        padding=.20 if any(trace.mode and 'text' in trace.mode for trace in top.data) else .08
+        limits=[low-.05*span if low<0 else 0,high+padding*span]
         top.update_yaxes(range=limits,autorange=False)
         top.update_yaxes(matches='y',secondary_y=True)
     top.update_layout(uirevision=profile_figure.layout.uirevision)
+    changes=(profile_figure.layout.meta or {}).get('profile_changes', [])
     if profile_only:
+        event_label_headroom(top)
+        add_profile_guides(top,changes,dark)
         compact_legend(top)
         return [top]
     selected={LAYERS[label] for label in layers}
@@ -311,19 +354,25 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
                     fig.add_trace(trace)
             glucose_axis(fig,loaded,days,unit)
         style_figure(fig,f'{label} · {dates}',ylabel,loaded['zone'],dark)
+        if 'target' in active:
+            fig.update_yaxes(range=[0,20 if unit=='mmol/L' else 360],autorange=False)
         if not has_records:
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
         figures.append(fig)
     if summary_layout:
         figures.extend(hourly_figure(loaded,key,days,dark) for key in ("bolus","carbs"))
     for figure in figures:
+        event_label_headroom(figure)
+        add_profile_guides(figure,changes,dark)
         compact_legend(figure)
     return figures
 
 
-def hourly_figure(loaded, key, days, dark):
-    stats=cached(loaded,'hourly',(key,tuple(days)),lambda: hourly_events(loaded,key,days))
+def hourly_figure(loaded, key, days, dark, exclude_smb=False):
+    stats=cached(loaded,'hourly',(key,tuple(days),exclude_smb),lambda: hourly_events(loaded,key,days,exclude_smb))
     label,unit=('Boluses','U') if key=='bolus' else ('Carbs','g')
+    if key == 'bolus' and exclude_smb:
+        label = 'Boluses (no SMB)'
     color=COLORS[key];theme=palette(dark)
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.68,.32],vertical_spacing=.14)
     details=[[[day,f'{hour:02}:00–{hour+1:02}:00',value,stats['counts'][i][hour],stats['status'][i][hour],stats['complete'][i][hour]]
@@ -337,14 +386,47 @@ def hourly_figure(loaded, key, days, dark):
         customdata=stats['contributing'],name='Median hourly '+label.lower(),showlegend=False,
         meta=dict(kind='hourly_histogram',label='Median hourly '+label.lower(),unit=unit,dataset=key),
         hovertemplate='%{y:.3g} '+unit+'<br>%{customdata} complete days<extra></extra>'),row=2,col=1)
-    height=min(540,max(290,205+len(days)*14))
+    height=min(680,max(410,310+len(days)*16))
     style_figure(fig,f'{label} hourly · {date_label(days)}','Date',loaded['zone'],dark,height=height)
     fig.update_layout(showlegend=False,margin=dict(l=90,r=64,t=40,b=36))
     fig.update_xaxes(range=[0,1440],tickvals=list(range(0,1441,240)),ticktext=[f'{x//60:02}:00' for x in range(0,1441,240)])
     fig.update_xaxes(matches='x',row=2,col=1)
     fig.update_yaxes(type='category',autorange='reversed',title_text='Date',tickfont_size=11,row=1,col=1)
     fig.update_yaxes(title_text='Median '+unit,rangemode='tozero',row=2,col=1)
-    fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key)
+    fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key,exclude_smb=exclude_smb)
     if all(v is None for row in stats['values'] for v in row):
         fig.add_annotation(text='No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)
     return fig
+
+
+def schedule_changes(rows, fields):
+    """Actual primary-profile changes, excluding midnight and repeated values."""
+    from profiles import minute
+    return [minute(row['time']) for previous,row in zip(rows,rows[1:])
+            if 0 < minute(row['time']) < 1440
+            and any(row[field] != previous[field] for field in fields)]
+
+
+def add_profile_guides(fig, changes, dark):
+    fig.update_layout(meta=dict(fig.layout.meta or {},profile_changes=list(changes)))
+    for value in changes:
+        fig.add_shape(type='line',xref='x',yref='paper',x0=value,x1=value,y0=0,y1=1,
+                      line=dict(color='rgba(220,230,240,.50)' if dark else 'rgba(45,65,85,.50)',width=2,dash='dash'),
+                      layer='above',name='Profile change',showlegend=False)
+
+
+def event_label_headroom(fig):
+    """Reserve room above amount labels on their own axis, including overlays."""
+    axes={trace.yaxis or 'y' for trace in fig.data
+          if trace.type=='scatter' and trace.mode and 'text' in trace.mode}
+    for name in axes:
+        axis=fig.layout['yaxis'+name[1:]]
+        axis.layer='below traces'
+        fig.update_xaxes(layer='below traces')
+        if axis.autorange is False:
+            continue  # Matched axes already receive the same extra headroom.
+        values=[float(value) for trace in fig.data if (trace.yaxis or 'y')==name
+                for value in trace.y if value is not None and pd.notna(value)]
+        if values:
+            high=max(values);span=max(high-min(0,min(values)),1)
+            axis.autorangeoptions=dict(include=high+.20*span)

@@ -10,9 +10,10 @@ async function harness(hidden=false) {
   get clientWidth(){return width;} get clientHeight(){return 720;}
   getBoundingClientRect(){return {width,height:720};}
   appendChild(x){this.children.push(x);return x;} replaceChildren(){this.children=[];this.textContent='';}
+  setAttribute(k,v){this[k]=v;}
   on(k,f){this.handlers[k]=f;}addEventListener(k,f){this.handlers[k]=f;}
  }
- const ids=Object.fromEntries(['profile','panels','hover-card','expand','viewer','previous-day','next-day','day-label','daily-summary','summary-title','summary-body','overlay-control','overlay-select'].map(id=>[id,new Element(id)]));
+ const ids=Object.fromEntries(['profile','profile-target-note','panels','hover-card','expand','viewer','previous-day','next-day','day-label','daily-summary','summary-title','summary-body','overlay-control','overlay-select','date-calendar'].map(id=>[id,new Element(id)]));
  const events={},observers=[],intersections=[];let plots=[],active=new Set(),races=0,reacts=0;
  const document={getElementById:id=>ids[id],createElement:()=>new Element(),addEventListener:(k,f)=>events[k]=f,fonts:{ready:fonts},
   documentElement:{requestFullscreen:async()=>{document.fullscreenElement=true;events.fullscreenchange();}},
@@ -40,32 +41,64 @@ async function harness(hidden=false) {
  if(hidden){assert.equal(plots.length,0,'Do not draw hidden tabs even when iframe dimensions are nonzero');width=1000;observers.forEach(f=>f());await settle();assert.equal(plots.length,0);intersections.forEach(f=>f([{isIntersecting:true}]));await settle();}
  assert.equal(plots.length,8);assert(plots.every(p=>p.layout.width===1000));
  assert.equal(ids['overlay-select'].children.length,6);
- assert.equal(ids['overlay-select'].value,'None');
+ assert.equal(ids['overlay-select'].children[0]['aria-pressed'],'true');
+ assert(ids['profile-target-note'].hidden);
  await ids.expand.handlers.click();await settle();assert(document.fullscreenElement);
  plots[0]._fullLayout.xaxis.range=[360,720];
- async function overlay(value) {ids['overlay-select'].value=value;await ids['overlay-select'].handlers.change();await settle();assert(document.fullscreenElement);assert.deepEqual(plots[0]._fullLayout.xaxis.range,[360,720]);}
+ async function overlay(value) {await ids['overlay-select'].children.find(b=>b.value===value).handlers.click();await settle();assert(document.fullscreenElement);assert.deepEqual(plots[0]._fullLayout.xaxis.range,[360,720]);}
+ const bolus=plots.find(p=>p.layout.meta?.dataset==='bolus' && p.layout.meta?.kind==='hourly');
+ const smbButton=vm.runInContext('bolusButtons[0]',context);
+ const allBolus=JSON.stringify(bolus.data);
+ await smbButton.handlers.click();await settle();assert.equal(smbButton['aria-pressed'],'true');
+ assert(bolus.layout.title.text.includes('no SMB'));assert.notEqual(JSON.stringify(bolus.data),allBolus);
+ const heat=bolus.data[0],bars=bolus.data[1];
+ for(let h=0;h<24;h++) {
+   const values=heat.z.map((row,i)=>heat.customdata[i][h][5]?row[h]:null).filter(v=>v!==null).sort((a,b)=>a-b);
+   const mid=Math.floor(values.length/2),median=values.length?(values.length%2?values[mid]:(values[mid-1]+values[mid])/2):null;
+   assert.equal(bars.y[h],median);
+ }
+ await smbButton.handlers.click();await settle();assert.equal(JSON.stringify(bolus.data),allBolus);
+ assert(plots.every(p=>p.layout.height>=285));
+ assert(plots.every(p=>p.layout.shapes.some(s=>s.name==='Profile change' && s.x0===600)));
+ await overlay('Nightscout targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
  const lower=plots.slice(1).map(p=>JSON.stringify(p.data));
  await overlay('Glucose');assert(plots[0].data.some(t=>t.meta?.kind==='median'),'Initial median mode is preserved');
  assert.equal(plots[0].layout.yaxis2.range[1],20);
+ assert(!ids['profile-target-note'].hidden);assert(ids['profile-target-note'].textContent.includes('historical profile'));
+ assert(plots[0].data.some(t=>t.meta?.kind==='target_fill' && t.fill==='toself'));
  await overlay('IOB + boluses');assert(plots[0].data.some(t=>t.meta?.kind==='median' && t.meta.dataset==='iob'));assert(!plots[0].data.some(t=>t.meta?.kind==='bolus'));
  assert.deepEqual(plots.slice(1).map(p=>JSON.stringify(p.data)),lower,'Changing overlay leaves other panels unchanged');
+ await smbButton.handlers.click();await settle();
  await ids['next-day'].handlers.click();await settle();
+ assert(bolus.layout.title.text.includes('no SMB'));assert.equal(bolus.data[0].y.length,1);
  assert.equal(ids['day-label'].textContent,'2026-09-16'); // wraps after last selected day
  assert(ids['summary-title'].textContent.includes('In range 100%'));
  const hourly=plots.find(p=>p.layout.meta?.dataset==='carbs' && p.layout.meta?.kind==='hourly');
  assert(hourly);assert.equal(hourly.data[0].y[0],'2026-09-16');assert.equal(hourly.data[0].z[0][5],30);assert.equal(hourly.data[1].y[5],30);
- await overlay('COB + carbs');assert(plots[0].data.some(t=>t.meta?.kind==='cob'));assert(plots[0].data.some(t=>t.meta?.kind==='carbs'));
+ await overlay('COB + carbs');assert(plots[0].layout.yaxis2.autorangeoptions.include>=36);assert(plots[0].data.find(t=>t.meta?.kind==='carbs').cliponaxis===false);assert(plots[0].data.some(t=>t.meta?.kind==='cob'));assert(plots[0].data.some(t=>t.meta?.kind==='carbs'));
  assert(plots[0].data.filter(t=>t.meta?.date).every(t=>t.meta.date==='2026-09-16'));
  await ids['next-day'].handlers.click();await settle();assert.equal(ids['day-label'].textContent,'2026-09-17');
+ assert(!plots[0].layout.yaxis2.autorangeoptions,'Clear padding from the previous day when no labeled events remain');
  await overlay('Glucose');assert(plots[0].data.some(t=>t.meta?.kind==='glucose'));assert(!plots[0].data.some(t=>t.meta?.kind==='median'));
  assert(plots[0].data.find(t=>t.meta?.kind==='glucose').showlegend,'Rebuild legend after filtering to a later day');
- await overlay('None');assert(!plots[0].layout.yaxis2);assert(plots[0].data.every(t=>!t.meta?.date));
+ await overlay('Nightscout targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
+ await overlay('None');assert(ids['profile-target-note'].hidden);assert(!plots[0].layout.yaxis2);assert(plots[0].data.every(t=>!t.meta?.date));
  assert.equal(plots[0].layout.yaxis.rangemode,'normal');
  assert(plots.every(p=>p.layout.title.text.includes('2026-09-17')));
  await ids['previous-day'].handlers.click();await settle();assert.equal(ids['day-label'].textContent,'2026-09-16');
+ await ids['day-label'].handlers.click();
+ const calendarButtons=ids['date-calendar'].children.flatMap(c=>c.children).filter(c=>c.title);
+ assert(calendarButtons.some(b=>b.disabled));
+ const chosen=calendarButtons.find(b=>b.title.startsWith('2026-09-17'));
+ await chosen.handlers.click();await settle();assert.equal(ids['day-label'].textContent,'2026-09-17');
+ assert(bolus.layout.title.text.includes('no SMB'));assert(document.fullscreenElement);
+ // Local day navigation must preserve the target panel's fixed range, including empty days.
+ const targetSpec={data:[],layout:{title:{text:'Temp targets · 2026-09-16'},xaxis:{range:[0,1440]},yaxis:{range:[0,20]},height:285}};
+ context.targetSpec=targetSpec;
+ assert.deepEqual(vm.runInContext("dailyView(targetSpec,1,'2026-09-17',[0,1440]).layout.yaxis.range",context),[0,20]);
  // Hide/show and concurrent resize/change requests must not overlap Plotly calls.
  width=0;observers.forEach(f=>f());await settle();
- width=780;ids['overlay-select'].value='IOB + boluses';const change=ids['overlay-select'].handlers.change();observers.forEach(f=>f());
+ width=780;const change=ids['overlay-select'].children.find(b=>b.value==='IOB + boluses').handlers.click();observers.forEach(f=>f());
  await change;await settle();assert.equal(races,0);assert(plots.every(p=>p.layout.width===780));
  const boxes=[{left:10,right:30,top:10,bottom:20},{left:15,right:35,top:10,bottom:20},{left:80,right:100,top:10,bottom:20}];
  const labels=boxes.map(box=>({style:{},getBoundingClientRect:()=>({...box,width:20,height:10})}));context.labelDiv={querySelectorAll:()=>labels};

@@ -312,7 +312,8 @@ def recorded_targets(treatments, temporary, start, end):
     """Combine AAPS effective-profile target schedules with actual temp overrides.
 
     Effective Profile Switch uploads contain an already-customized profileJson;
-    do not apply originalPercentage/originalTimeshift a second time.
+    do not apply originalPercentage/originalTimeshift a second time. Retain the
+    underlying scheduled limits as profile_low/profile_high during temp targets.
     """
     switches = []
     issues = []
@@ -396,17 +397,20 @@ def recorded_targets(treatments, temporary, start, end):
     for a,b in zip(boundaries,boundaries[1:]):
         while bi<len(baseline) and baseline[bi]['end']<=a:bi+=1
         while ti<len(temps) and temps[ti]['end']<=a:ti+=1
-        chosen=temps[ti] if ti<len(temps) and temps[ti]['time']<=a<temps[ti]['end'] else baseline[bi] if bi<len(baseline) and baseline[bi]['time']<=a<baseline[bi]['end'] else None
+        historical=baseline[bi] if bi<len(baseline) and baseline[bi]['time']<=a<baseline[bi]['end'] else None
+        chosen=temps[ti] if ti<len(temps) and temps[ti]['time']<=a<temps[ti]['end'] else historical
         if chosen is None or chosen['low'] is None:
             continue
-        item=dict(chosen,time=a,end=b)
-        if merged and merged[-1]['end']==a and all(merged[-1][k]==item[k] for k in ('low','high','source','reason')):
+        # Retain the historical scheduled range while a temp target overrides it.
+        item=dict(chosen,time=a,end=b,profile_low=historical['low'] if historical else None,
+                  profile_high=historical['high'] if historical else None)
+        if merged and merged[-1]['end']==a and all(merged[-1][k]==item[k] for k in ('low','high','source','reason','profile_low','profile_high')):
             merged[-1]['end']=b
         else:
             merged.append(item)
     if not baseline:
         issues.append('No usable effective-profile target history was returned; only recorded temporary targets can be displayed.')
-    return pd.DataFrame(merged,columns=['time','end','low','high','source','reason']),list(dict.fromkeys(issues))
+    return pd.DataFrame(merged,columns=['time','end','low','high','source','reason','profile_low','profile_high']),list(dict.fromkeys(issues))
 
 
 def daily_summary(loaded, days, unit):

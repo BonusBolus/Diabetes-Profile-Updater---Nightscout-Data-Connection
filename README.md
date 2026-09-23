@@ -1,8 +1,39 @@
 # Profile Studio
 
-Build: **Nightscout-7**. This label also appears at the top of the sidebar, so you can confirm you are running this update.
+Build: **Nightscout-8.4**. This label also appears at the top of the sidebar, so you can confirm you are running this update.
 
 A local Python app for creating diabetes profile versions by comparing a draft with one or two saved references. Includes your **LenStandardV17** example in the **Standard** category, with **DIA 8.5 hours**. The `Undefined` field is omitted.
+
+## Nightscout-8.4 temporary-target axis
+
+The temporary-target panel now uses a fixed 0–20 mmol/L vertical range (0–360 mg/dL), including empty days, median/multiple-day views and expanded day navigation. Values outside the range are clipped. The independent temporary-target overlay uses the same limits; selecting Same axis scale still matches both overlay axes to their combined data range.
+
+## Nightscout-8.3 event labels
+
+Carb and user-bolus amount labels can extend beyond the plotting boundary without being cut off. Axes with labeled events reserve extra headroom, including profile overlays and matched axes. Day navigation recalculates that space from the displayed day's data. Existing overlapping-label suppression remains in place.
+
+## Nightscout-8.2 profile-change markers
+
+Profile-change guides are now 2-pixel dashed lines with higher contrast in both light and dark mode, making them distinct from the standard grid. Their positions and historical temporary-target shading are unchanged.
+
+## Nightscout-8.1 temporary-target shading
+
+Temporary targets now use separate rectangular fills rather than fills connecting multiple intervals. Dotted vertical sides reach the nearest edge of the historical profile target range active at that time. A target below that range is shaded upward. A target range already overlapping the historical range is shaded only within its own limits. Colors still come from the uploaded reason.
+
+The underlying historical limits are retained from AndroidAPS effective-profile uploads even during a temporary override. Rectangles split when those limits change, and at midnight. Each displayed day uses its own history. The draft and comparison profiles never supply this baseline. If historical target data is unavailable, the temporary-target line is shown without shading; a warning and the graph caption explain the limitation. No scheduled target line is drawn outside temporary-target intervals. The fixed glucose 4–10 band is separate.
+
+The note appears beneath affected panels and profile overlays, including expanded view. Restart the app and click **Load / refresh data** after updating to load the historical limits. Confirm **Build: Nightscout-8.1** in the sidebar.
+
+## Nightscout-8 graph controls
+
+- Taller profile, recorded-data and hourly summary graphs provide more vertical plotting space. Glucose retains its 0–20 mmol/L minimum scale (expanding for higher values).
+- Select loaded days using a month calendar. Colored buttons are selected; dates outside the loaded interval are disabled. Loaded dates may still contain gaps or have no records. In multiple-day and median views, click days to include/exclude them, or use All loaded / Clear. The From / Through calendars still define the manual download window; the app does not query Nightscout's entire history to discover dates.
+- Data layers and the right-axis overlay use clickable pills. In expanded view, the date button opens a calendar for jumping to a single loaded day, and overlay buttons remain available.
+- The bolus grid has an **Exclude SMB** toggle directly above it. It updates both the grid and histogram and remains active when navigating loaded days in that viewer. It removes only explicitly classified SMB events; unknown boluses stay included. It does not change other graphs, stored records or daily summary totals. Rebuilding the viewer (for example, switching profile settings) starts with all boluses included again.
+- Dashed vertical guides mark actual changes in the primary profile/draft's selected setting. Switching Basal to I:C uses I:C changes. In Compare mode these follow Profile 1. Repeated values and the midnight boundary do not add lines. Guides also appear on recorded panels, heatmaps, histograms and expanded overlays.
+- The hourly histogram remains the median of each hour's daily totals across complete hours, including zero-event hours; partial hours appear only in the grid. Both views use the same SMB filter and local timezone.
+
+Updating an existing installation: stop Streamlit, copy the update files into the existing app folder (including the new `date_controls.py`), then restart with `start.bat` or your existing virtual environment. Check **Build: Nightscout-8.2** in the sidebar. Your existing `data/` and `examples/` folders are not part of this code update.
 
 ## Start on Windows
 
@@ -109,11 +140,11 @@ A compact 245-pixel profile stays pinned above a scrollable stack of 205-pixel r
 
 Every graph includes its displayed date or date range, including saved image exports. Profile-only graphs use the effective date when set, otherwise an explicitly labeled viewing date. With Nightscout loaded, the profile graph also names the selected recording dates. Nonconsecutive selections say “selected days.” Tick labels and legends are slightly larger.
 
-Glucose axes start at **0–20 mmol/L** and expand upwards if any displayed-day reading exceeds 20. In mg/dL, the equivalent starting range is 0–360. A fixed green **4–10 mmol/L** band (72–180 mg/dL) is shown on both the glucose panel and glucose overlays. This band is separate from recorded Nightscout targets. Points below 4 are red, above 10 orange, and in range green. IOB uses blue, basal cyan/blue, and COB/carbs orange; IOB, COB and basal use filled curves. Multi-day traces retain data-type colors. Recorded legends show concise series names once, rather than repeating one dated label per day. Dates remain in graph titles and hover details. IOB, COB and temporary-target outlines are solid on every day. IOB/COB are filled to zero; temporary-target ranges are filled between low and high, so equal limits remain a single line. Basal and glucose retain day-specific line/marker styles.
+Glucose axes start at **0–20 mmol/L** and expand upwards if any displayed-day reading exceeds 20. In mg/dL, the equivalent starting range is 0–360. A fixed green **4–10 mmol/L** band (72–180 mg/dL) is shown on both the glucose panel and glucose overlays. This band is separate from recorded Nightscout targets. Points below 4 are red, above 10 orange, and in range green. IOB uses blue, basal cyan/blue, and COB/carbs orange; IOB, COB and basal use filled curves. Multi-day traces retain data-type colors. Recorded legends show concise series names once, rather than repeating one dated label per day. Dates remain in graph titles and hover details. IOB, COB and temporary-target outlines are solid on every day. IOB/COB are filled to zero; temporary-target shading uses independent rectangles extending toward the historical profile target range, with dotted vertical sides. Basal and glucose retain day-specific line/marker styles.
 
 **Nightscout targets displays temporary targets only**, using uploaded **Temporary Target** treatment intervals. Scheduled profile target lines are hidden in every recorded panel and overlay. An interval begins at its event timestamp and ends at its duration, a cancellation, a replacement, or the displayed date boundary. A target already active at the first loaded date is requested too. Missing/invalid intervals stay blank. Equal limits such as 6.6–6.6 remain equal; target units are converted for display. The fixed 4–10 background band is separate and stays visible.
 
-Colors use the uploaded treatment's **`reason` string**, normalized for capitalization and surrounding spaces: **Eating Soon orange, Activity cyan, Hypo/Hypoglycemia red**. **Custom, missing, localized or other unrecognized reasons use green**. The original reason appears on hover; no reason is inferred from glucose, target level, dose or time. Cancel is an end event, not a fourth colored target. The app retains its historical schedule parser internally, but filters scheduled targets out of all displays. Reload Nightscout after updating.
+Colors use the uploaded treatment's **`reason` string**, normalized for capitalization and surrounding spaces: **Eating Soon orange, Activity cyan, Hypo/Hypoglycemia red**. **Custom, missing, localized or other unrecognized reasons use green**. The original reason appears on hover; no reason is inferred from glucose, target level, dose or time. Cancel is an end event, not a fourth colored target. The app retains the underlying scheduled range during each temporary target to anchor its shading; standalone scheduled target lines remain hidden. Reload Nightscout after updating.
 
 **IOB + boluses** and **COB + carbs** can each be selected as a combined overlay on the profile graph. Both members use the right axis (U or g); the profile stays on the left. I:C, ISF and Target profile axes use a fitted range and need not start at zero; basal retains zero. **Same axis scale** explicitly overrides that independent scaling. Charts wait until their tab has a visible width and fonts are ready before drawing. Redraw, overlay/date changes and resize operations are serialized, and charts receive explicit widths after resizing or returning to a tab. Concise deduplicated legends, short unit labels, reserved axis space and collision suppression for amount labels reduce overlap. If two amount labels collide, one is hidden while its marker and hover value remain available.
 

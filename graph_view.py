@@ -10,7 +10,7 @@ import streamlit as st
 from appearance import palette
 from chart_cache import cached
 from nightscout import daily_summary
-from nightscout_charts import graph_figures, OVERLAY_CHOICES
+from nightscout_charts import graph_figures, OVERLAY_CHOICES, hourly_figure, add_profile_guides
 
 
 @lru_cache(maxsize=1)
@@ -33,7 +33,13 @@ def navigation_bundle(profile, view, unit, dark):
         daily_top = daily[0] if option == view.get('overlay', 'None') else graph_figures(
             profile, **dict(options, days=days, mode='One day'), unit=unit, dark=dark)[0]
         overlays[option] = dict(selected=json.loads(initial_top.to_json()), daily=json.loads(daily_top.to_json()))
-    return dict(days=[day.isoformat() for day in days], selected=[day.isoformat() for day in view['days']],
+    bolus_variants = {}
+    if view['mode'] == 'Median + band':
+        for label, selected in [('selected',view['days']),('daily',days)]:
+            fig = hourly_figure(loaded,'bolus',selected,dark,exclude_smb=True)
+            add_profile_guides(fig,(profile.layout.meta or {}).get('profile_changes',[]),dark)
+            bolus_variants[label] = json.loads(fig.to_json())
+    return dict(bolus_without_smb=bolus_variants, days=[day.isoformat() for day in days], selected=[day.isoformat() for day in view['days']],
                 mode=view['mode'], same_scale=view.get('same_scale',False), unit=unit,
                 glucose_overlay=view.get('overlay')=='Glucose', overlay=view.get('overlay','None'), overlays=overlays,
                 figures=[json.loads(fig.to_json()) for fig in daily],
@@ -66,8 +72,17 @@ html,body {margin:0;height:100%;font-family:Arial,sans-serif;background:BACKGROU
 #toolbar {min-height:38px;flex:0 0 auto;flex-wrap:wrap;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:0 10px;box-sizing:border-box;border-bottom:1px solid GRID;}
 #toolbar-left {display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
 #overlay-control {font-size:12px;display:flex;align-items:center;gap:5px;}
-#overlay-select {max-width:170px;}
+#overlay-select {display:flex;flex-wrap:wrap;gap:4px;}
+button[aria-pressed="true"] {outline:2px solid #22a6bb;}
+.bolus-controls {padding:5px 12px;display:flex;align-items:center;gap:10px;font-size:12px;}
+.bolus-controls button {background:transparent;color:inherit;border:1px solid #80808080;border-radius:5px;padding:5px 10px;cursor:pointer;}
+#date-calendar {position:absolute;z-index:20;top:42px;left:10px;background:SURFACE;border:1px solid GRID;border-radius:6px;padding:12px;max-height:65vh;overflow:auto;}
+.calendar-grid {display:grid;grid-template-columns:repeat(7,32px);gap:3px;}
+.calendar-grid button {padding:5px 2px!important;}
+.calendar-month {font-weight:bold;margin:8px 0;}
+#date-calendar[hidden] {display:none;}
 #toolbar button,#toolbar select {border:1px solid GRID;border-radius:5px;background:SURFACE;color:TEXT;padding:4px 9px;cursor:pointer;white-space:nowrap;}
+#toolbar button:disabled {opacity:.35;cursor:default;}
 #day-label {font-size:12px;}
 #daily-summary {font-size:12px;padding:5px 10px;border-bottom:1px solid GRID;}
 #daily-summary summary {cursor:pointer;}
@@ -78,31 +93,33 @@ html,body {margin:0;height:100%;font-family:Arial,sans-serif;background:BACKGROU
 #summary-body p {margin:6px 0;opacity:.8;}
 #hover-card {min-width:0;max-width:100%;overflow-wrap:anywhere;font-size:13px;line-height:1.25;text-align:right;display:flex;flex-wrap:wrap;justify-content:flex-end;gap:3px 12px;pointer-events:none;}
 #hover-card strong {font-weight:600;} #hover-card .muted {opacity:.8;}
-#profile {flex:0 0 245px;border-bottom:1px solid GRID;background:BACKGROUND;}
+#profile {flex:0 0 310px;border-bottom:1px solid GRID;background:BACKGROUND;}
 #panels {flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;}
 .graph {width:100%;min-width:0;position:relative;}
+.target-note {flex:0 0 auto;margin:0;padding:4px 12px 10px;font-size:12px;line-height:1.4;opacity:.8;}
+.target-note[hidden] {display:none;}
 .hoverlayer {visibility:hidden;}
 .time-guide {position:absolute;width:0;border-left:1px dashed TEXT;opacity:.65;pointer-events:none;z-index:4;display:none;}
 .point-highlight {position:absolute;width:14px;height:14px;border:2px solid TEXT;border-radius:50%;box-shadow:0 0 0 2px SURFACE;transform:translate(-50%,-50%);pointer-events:none;z-index:5;display:none;}
 </style></head><body><div id="viewer"><div id="toolbar"><div id="toolbar-left"><button id="expand" type="button">⛶ Expand graphs</button>
 <button id="previous-day" type="button" aria-label="Previous loaded day">← Previous</button>
-<span id="day-label"></span><button id="next-day" type="button" aria-label="Next loaded day">Next →</button>
-<label id="overlay-control">Overlay <select id="overlay-select" aria-label="Nightscout overlay on profile"></select></label></div>
+<button id="day-label" type="button" aria-label="Choose loaded day" aria-expanded="false"></button><div id="date-calendar" hidden></div><button id="next-day" type="button" aria-label="Next loaded day">Next →</button>
+<div id="overlay-control">Overlay <div id="overlay-select" role="group" aria-label="Nightscout overlay on profile"></div></div></div>
 <div id="hover-card" role="status" aria-live="polite">Hover a point for details</div></div>
 <details id="daily-summary"><summary id="summary-title">Daily summary</summary><div id="summary-body"></div></details>
-<div id="profile" class="graph"></div><div id="panels" tabindex="0" aria-label="Recorded data graphs; scroll here. Profile remains pinned."></div></div>
+<div id="profile" class="graph"></div><p id="profile-target-note" class="target-note" hidden></p><div id="panels" tabindex="0" aria-label="Recorded data graphs; scroll here. Profile remains pinned."></div></div>
 <script>""".replace('BACKGROUND',theme['background']).replace('SURFACE',theme['surface']).replace('TEXT',theme['text']).replace('GRID',theme['grid']) + plotly_script()+"""</script><script>
 const payload = __VIEWER_PAYLOAD__;
 const specs = payload.specs;
 const navigation = payload.navigation;
 let selectedDays = navigation ? navigation.selected.slice() : [];
 const previousDay=document.getElementById('previous-day'),nextDay=document.getElementById('next-day');
-const dayLabel=document.getElementById('day-label');
+const dayLabel=document.getElementById('day-label'),dateCalendar=document.getElementById('date-calendar');
 const overlayControl=document.getElementById('overlay-control'),overlaySelect=document.getElementById('overlay-select');
-let currentOverlay=navigation ? navigation.overlay || 'None' : 'None', dateCycled=false;
+let currentOverlay=navigation ? navigation.overlay || 'None' : 'None', dateCycled=false, excludeSMB=false;
+const overlayButtons=[],bolusButtons=[];
 if(navigation && navigation.overlays) {
-  Object.keys(navigation.overlays).forEach(value=>{const option=document.createElement('option');option.value=value;option.textContent=value==='Nightscout targets'?'Temp targets':value;overlaySelect.appendChild(option);});
-  overlaySelect.value=currentOverlay;
+  Object.keys(navigation.overlays).forEach(value=>{const option=document.createElement('button');option.type='button';option.value=value;option.textContent=value==='Nightscout targets'?'Temp targets':value;option.addEventListener('click',()=>changeOverlay(value));overlaySelect.appendChild(option);overlayButtons.push(option);});
 } else overlayControl.hidden=true;
 const summary=document.getElementById('daily-summary'),summaryTitle=document.getElementById('summary-title'),summaryBody=document.getElementById('summary-body');
 function number(value,digits=1) {return value===null || value===undefined ? '—' : Number(value.toFixed(digits)).toString();}
@@ -127,11 +144,23 @@ function updateSummary() {
 }
 updateSummary();
 const graphs = [document.getElementById('profile')];
+const targetNotes = [document.getElementById('profile-target-note')];
+function updateTargetNote(div,index) {
+  const note=targetNotes[index];
+  note.hidden=!div.data.some(trace=>trace.meta?.kind==='target');
+  note.textContent='Shading reaches the historical profile target range active at that time, from Nightscout—not the draft. Dotted sides mark interval boundaries. Missing target history: line only.';
+}
 const panels = document.getElementById('panels');
 const card = document.getElementById('hover-card');
 const expand = document.getElementById('expand');
 for(let i=1;i<specs.length;i++) {
+  if(specs[i].layout.meta?.kind==='hourly' && specs[i].layout.meta.dataset==='bolus' && navigation?.bolus_without_smb?.selected) {
+    const bar=document.createElement('div');bar.className='bolus-controls';
+    const button=document.createElement('button');button.type='button';button.textContent='Exclude SMB';button.addEventListener('click',()=>toggleSMB(i));bar.appendChild(button);bolusButtons.push(button);
+    const note=document.createElement('span');note.textContent='Grid + histogram · unknown boluses remain included';bar.appendChild(note);panels.appendChild(bar);
+  }
   const div=document.createElement('div');div.className='graph';panels.appendChild(div);graphs.push(div);
+  const note=document.createElement('p');note.className='target-note';note.hidden=true;panels.appendChild(note);targetNotes.push(note);
 }
 let syncing=false;
 const guides=[], highlights=[];
@@ -199,7 +228,9 @@ function sizedLayout(spec, index) {
 }
 function controls() {
   previousDay.disabled=!ready || syncing || !navigation || navigation.days.length<2;
-  nextDay.disabled=previousDay.disabled;overlaySelect.disabled=!ready || syncing;
+  nextDay.disabled=previousDay.disabled;dayLabel.disabled=!ready || syncing || !navigation;
+  overlayButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(button.value===currentOverlay));});
+  bolusButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(excludeSMB));button.textContent=excludeSMB?'Exclude SMB: on':'Exclude SMB: off';});
 }
 function compactLegend(data) {
   const seen=new Set();
@@ -238,10 +269,10 @@ async function startPlots() {
       if(visibleWidth()<50)return;
       await Promise.all(graphs.map((div,i)=>Plotly.newPlot(div,specs[i].data,sizedLayout(specs[i],i),
         {responsive:false,displaylogo:false,scrollZoom:false,toImageButtonOptions:{format:'png',scale:2}})));
-      graphs.forEach(div=>{
+      graphs.forEach((div,index)=>{
         const guide=document.createElement('div');guide.className='time-guide';div.appendChild(guide);guides.push(guide);
         const marker=document.createElement('div');marker.className='point-highlight';div.appendChild(marker);highlights.push(marker);
-        div.on('plotly_afterplot',()=>tidyLabels(div));tidyLabels(div);
+        div.on('plotly_afterplot',()=>{tidyLabels(div);updateTargetNote(div,index);});tidyLabels(div);updateTargetNote(div,index);
         div.on('plotly_hover',event=>showHover(div,event));div.on('plotly_unhover',clearHover);
         div.on('plotly_relayout',event=>{
           if(syncing)return;
@@ -288,29 +319,73 @@ function dailyView(spec,index,day,range) {
   const relevant=layout.title.text.startsWith('Glucose ·')?recorded.filter(t=>t.meta.kind==='glucose'):recorded;
   if(index>0 && !relevant.some(t=>Array.isArray(t.y) && t.y.some(v=>v!==null)))layout.annotations=[{text:'No recorded data for this day',xref:'paper',yref:'paper',x:.5,y:.5,showarrow:false}];
   const isGlucose=index===0?currentOverlay==='Glucose':layout.title.text.startsWith('Glucose ·');
+  const isTarget=index===0?currentOverlay==='Nightscout targets':layout.title.text.startsWith('Temp targets ·');
   const scale=navigation.unit==='mmol/L'?1:18;
   let peak=0;data.filter(t=>t.meta?.kind==='glucose').forEach(t=>t.y.forEach(y=>{if(y!==null)peak=Math.max(peak,y);}));
   const maximum=Math.max(20*scale,peak>20*scale?Math.ceil(peak*1.05/scale)*scale:20*scale);
-  [layout.yaxis,layout.yaxis2].filter(Boolean).forEach(axis=>{delete axis.range;axis.autorange=true;delete axis.matches;});
+  [layout.yaxis,layout.yaxis2].filter(Boolean).forEach(axis=>{delete axis.range;axis.autorange=true;delete axis.matches;delete axis.autorangeoptions;});
   if(isGlucose){const axis=index===0?layout.yaxis2:layout.yaxis;axis.range=[0,maximum];axis.autorange=false;}
+  if(isTarget){const axis=index===0?layout.yaxis2:layout.yaxis;axis.range=[0,20*scale];axis.autorange=false;}
   if(index===0 && navigation.same_scale && layout.yaxis2){
-    let low=0,high=isGlucose?maximum:0;
+    let low=0,high=isGlucose?maximum:isTarget?20*scale:0;
     data.forEach(t=>{if(Array.isArray(t.y))t.y.forEach(y=>{if(Number.isFinite(y)){low=Math.min(low,y);high=Math.max(high,y);}});});
-    const span=Math.max(high-low,1),limits=[low<0?low-.05*span:0,high+.08*span];
+    const padding=data.some(t=>t.mode?.includes('text')) ? .20 : .08;
+    const span=Math.max(high-low,1),limits=[low<0?low-.05*span:0,high+padding*span];
     layout.yaxis.range=limits;layout.yaxis2.range=limits;layout.yaxis.autorange=false;layout.yaxis2.autorange=false;layout.yaxis2.matches='y';
   }
+  // Recompute per displayed day; do not retain a larger day's label padding.
+  const labelAxes=new Set(data.filter(t=>t.mode?.includes('text')).map(t=>t.yaxis || 'y'));
+  labelAxes.forEach(name=>{
+    const axis=layout['yaxis'+name.slice(1)];axis.layer='below traces';layout.xaxis.layer='below traces';
+    if(axis.autorange===false)return;
+    const values=data.filter(t=>(t.yaxis || 'y')===name).flatMap(t=>t.y || []).filter(Number.isFinite);
+    if(values.length){const high=Math.max(...values),span=Math.max(high-Math.min(0,...values),1);axis.autorangeoptions={include:high+.20*span};}
+  });
   layout.uirevision=day+':'+currentOverlay;
   return {data,layout};
 }
-async function cycleDay(direction) {
+function drawCalendar() {
+  dateCalendar.replaceChildren();
+  if(!navigation)return;
+  const months=[...new Set(navigation.days.map(day=>day.slice(0,7)))];
+  months.forEach(month=>{
+    const [year,number]=month.split('-').map(Number);
+    const title=document.createElement('div');title.className='calendar-month';title.textContent=new Date(year,number-1,1).toLocaleDateString(undefined,{month:'long',year:'numeric'});dateCalendar.appendChild(title);
+    const grid=document.createElement('div');grid.className='calendar-grid';dateCalendar.appendChild(grid);
+    ['M','T','W','T','F','S','S'].forEach(text=>{const label=document.createElement('span');label.textContent=text;grid.appendChild(label);});
+    const offset=(new Date(year,number-1,1).getDay()+6)%7;
+    for(let i=0;i<offset;i++)grid.appendChild(document.createElement('span'));
+    for(let i=1;i<=new Date(year,number,0).getDate();i++) {
+      const day=month+'-'+String(i).padStart(2,'0'),button=document.createElement('button');button.type='button';button.textContent=String(i);button.disabled=!navigation.days.includes(day);button.title=day+(button.disabled?' · not loaded':' · loaded');button.setAttribute('aria-pressed',String(selectedDays.includes(day)));
+      button.addEventListener('click',()=>{dateCalendar.hidden=true;dayLabel.setAttribute('aria-expanded','false');cycleDay(0,day);});grid.appendChild(button);
+    }
+  });
+}
+dayLabel.addEventListener('click',()=>{drawCalendar();dateCalendar.hidden=!dateCalendar.hidden;dayLabel.setAttribute('aria-expanded',String(!dateCalendar.hidden));});
+async function toggleSMB(index) {
+  if(!ready || syncing)return;
+  return enqueue(async()=>{
+    const next=!excludeSMB,range=graphs[0]._fullLayout.xaxis.range.slice();
+    syncing=true;controls();clearHover();
+    try {
+      const source=next?navigation.bolus_without_smb[dateCycled?'daily':'selected']:(dateCycled?navigation.figures[index]:specs[index]);
+      const view=dateCycled?dailyView(source,index,selectedDays[0],range):JSON.parse(JSON.stringify(source));
+      view.layout=sizedLayout(view,index);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;
+      await Plotly.react(graphs[index],view.data,view.layout);excludeSMB=next;
+    } catch(error) {card.textContent='Could not update SMB filter.';}
+    finally {syncing=false;controls();}
+  });
+}
+async function cycleDay(direction,requestedDay=null) {
   if(!navigation || !ready || syncing)return;
   return enqueue(async()=>{
     const current=direction>0?selectedDays[selectedDays.length-1]:selectedDays[0];
     const index=(navigation.days.indexOf(current)+direction+navigation.days.length)%navigation.days.length;
-    const day=navigation.days[index], range=graphs[0]._fullLayout.xaxis.range.slice();
+    const day=requestedDay || navigation.days[index], range=graphs[0]._fullLayout.xaxis.range.slice();
     syncing=true;controls();clearHover();
     try {
       const source=navigation.figures.slice();
+      if(excludeSMB)source.forEach((spec,i)=>{if(spec.layout.meta?.kind==='hourly' && spec.layout.meta.dataset==='bolus')source[i]=navigation.bolus_without_smb.daily;});
       if(navigation.overlays)source[0]=navigation.overlays[currentOverlay].daily;
       const views=source.map((spec,i)=>dailyView(spec,i,day,range));
       await Promise.all(graphs.map((div,i)=>Plotly.react(div,views[i].data,views[i].layout)));
@@ -319,9 +394,8 @@ async function cycleDay(direction) {
     finally {syncing=false;controls();}
   });
 }
-async function changeOverlay() {
+async function changeOverlay(requested) {
   if(!navigation?.overlays || !ready || syncing)return;
-  const requested=overlaySelect.value;
   return enqueue(async()=>{
     const previous=currentOverlay;
     syncing=true;controls();clearHover();
@@ -336,11 +410,10 @@ async function changeOverlay() {
         view.layout.uirevision='overlay:'+currentOverlay;
       }
       await Plotly.react(graphs[0],view.data,view.layout);tidyLabels(graphs[0]);
-    } catch(error) {currentOverlay=previous;overlaySelect.value=previous;card.textContent='Could not change overlay. Reopen the graph view.';}
+    } catch(error) {currentOverlay=previous;card.textContent='Could not change overlay. Reopen the graph view.';}
     finally {syncing=false;controls();}
   });
 }
-overlaySelect.addEventListener('change',changeOverlay);
 previousDay.addEventListener('click',()=>cycleDay(-1));
 nextDay.addEventListener('click',()=>cycleDay(1));
 expand.addEventListener('click',async()=>{
@@ -365,4 +438,4 @@ def render_graphs(figures, dark, navigation=None, cache=None):
     # A fixed profile plus a separately scrollable stack works on short screens
     # without a page-level overlay covering the editor or save controls.
     html = cached(cache,'html',(navigation['render_key'],dark),lambda: viewer_html(figures,dark,navigation),limit=3) if cache is not None and navigation and 'render_key' in navigation else viewer_html(figures,dark,navigation)
-    st.iframe(html,height=720 if len(figures)>1 else 290,tab_index=0)
+    st.iframe(html,height=860 if len(figures)>1 else 410,tab_index=0)

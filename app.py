@@ -13,7 +13,7 @@ import streamlit as st
 from appearance import COLORS, LIGHT_COLORS, palette, reference_color, sync_native_theme
 from comparison_tables import comparison_table, styled_comparison
 from editor_history import record_edit, reset_history, restore_edit
-from nightscout_charts import graph_figures
+from nightscout_charts import graph_figures, schedule_changes, add_profile_guides
 from graph_view import render_graphs, prepared_graphs
 from nightscout_ui import sidebar_controls, graph_date_controls
 
@@ -117,13 +117,14 @@ def comparison_figure(rows, references, metric, unit, primary_label="Draft", eff
     effective = effective_date if primary_label != "Draft" else st.session_state.get("draft", {}).get("effective_date")
     date_text = "Effective: " + effective if effective else "Viewed: " + date.today().isoformat() + " · effective date not set"
     fig.update_layout(title=dict(text=METRICS[metric]+" · "+date_text, font=dict(size=16)),
-        height=350, margin=dict(l=12,r=12,t=58,b=15),
+        height=410, margin=dict(l=12,r=12,t=58,b=15),
         template="plotly_dark" if dark else "plotly_white",
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=theme["surface"], font=dict(color=theme["text"],size=14),
         legend=dict(orientation="h", y=-0.24, font=dict(size=13)), hovermode="x unified",
         xaxis=dict(range=[0,1440], tickvals=list(range(0,1441,240)), ticktext=[clock(x) for x in range(0,1441,240)],
                    title="Time of day", gridcolor=theme["grid"]),
         yaxis=dict(title=unit, gridcolor=theme["grid"], rangemode="tozero" if metric == "basal" else "normal"), uirevision=metric)
+    add_profile_guides(fig, schedule_changes(rows, fields), dark)
     return fig
 
 
@@ -145,7 +146,7 @@ for state_key in ('compare_second','second_reference_category','second_reference
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Nightscout-7")
+    st.caption("Build: Nightscout-8.4")
     st.caption("Create · compare · keep your history")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
@@ -310,7 +311,7 @@ if page == "History":
         hovertemplate="v%{x} · %{customdata}<br>%{y:.4g}<extra></extra>"))
     history_dates = sorted(p.get("effective_date") or p["created_at"][:10] for p in selected)
     fig.update_layout(title=dict(text=f"{selected_category} · {history_dates[0]} – {history_dates[-1]} (effective / saved dates)",font=dict(size=16)),
-                      font_size=14, height=330, xaxis=dict(title="Version", dtick=1), yaxis_title=trend_metric,
+                      font_size=14, height=390, xaxis=dict(title="Version", dtick=1), yaxis_title=trend_metric,
                       template="plotly_dark" if dark else "plotly_white",
                       paper_bgcolor=theme["background"], plot_bgcolor=theme["surface"], font_color=theme["text"],
                       margin=dict(l=10,r=10,t=58,b=10))

@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import streamlit as st
 
 from nightscout import NightscoutError, load_nightscout
+from date_controls import day_calendar
 from nightscout_charts import LAYERS, OVERLAYS, OVERLAY_CHOICES, date_label
 
 
@@ -46,15 +47,10 @@ def sidebar_controls(profile_zone):
         st.caption(f"Loaded {loaded['first']} through {loaded['last']} · {loaded['zone']}\n\n"
                    f"Updated {loaded['loaded_at'].astimezone(ZoneInfo(loaded['zone'])).strftime('%Y-%m-%d %H:%M %Z')}")
         for warning in loaded["warnings"]:
-            if "effective-profile" not in warning and "effective profile" not in warning:
-                st.warning(warning)
-        days = [loaded["first"]+timedelta(days=i) for i in range((loaded["last"]-loaded["first"]).days+1)]
+            st.warning(warning)
         mode = st.radio("Nightscout view", ["One day", "Multiple days", "Median + band"], key="ns_mode")
-        if mode == "One day":
-            days = [st.selectbox("Day to display", days, index=len(days)-1, key="ns_day")]
-        else:
-            days = st.multiselect("Days to display", days, default=days, key="ns_days")
-        layers = st.multiselect("Data layers", list(LAYERS), default=["Glucose"], key="ns_layers")
+        days = day_calendar(loaded, multiple=mode != "One day")
+        layers = st.pills("Data layers", list(LAYERS), selection_mode="multi", default=["Glucose"], key="ns_layers")
         overlay = st.session_state.get("ns_overlay", "None")
         show_targets = st.checkbox("Show temporary targets on glucose", value=True, key="ns_show_targets")
         for label in set(layers):
@@ -63,7 +59,7 @@ def sidebar_controls(profile_zone):
                 st.caption(f"No {label.lower()} records were returned for the loaded dates.")
         if mode == "Median + band":
             st.caption("Glucose, temp basal, IOB and COB: median and 25–75% band in 5-minute bins, with one contribution per day. Missing intervals stay blank. Temp basal summarizes recorded temp rates only. Bolus and carb heatmaps show hourly totals; histograms show the median hourly total across complete hours. Zero means no event returned; unavailable and future hours stay blank.")
-        st.caption("Only temporary-target events are drawn; scheduled profile targets are hidden. Reason colors: Eating Soon orange, Activity cyan, Hypo red, other/missing green. The 4–10 band is a fixed guide.")
+        st.caption("Temporary targets use rectangular shading toward the historical profile target range. Missing target history: line only. Reason colors: Eating Soon orange, Activity cyan, Hypo red, other/missing green. The 4–10 band is a fixed guide.")
         st.caption("Temporary basal shows recorded intervals, not a reconstructed delivery total. Gaps are not filled with your draft basal. IOB/COB are uploaded values.")
         st.caption("Select historical days manually; they are not automatically matched to profile versions. Editing your profile never changes the recorded data.")
         return {"loaded": loaded, "days": sorted(days), "mode": mode, "layers": layers, "overlay": overlay, "show_targets": show_targets}
@@ -90,7 +86,7 @@ def sync_graph_option(metric, field):
 
 
 def graph_date_controls(view, metric):
-    overlay_col, scale_col, date_col, previous_col, next_col = st.columns([2.3,1.6,2.2,1.2,1.2],vertical_alignment="bottom")
+    overlay_col, scale_col, date_col, previous_col, next_col = st.columns([4.5,1.5,2,1.2,1.2],vertical_alignment="bottom")
     choices = OVERLAY_CHOICES
     old_overlay = st.session_state.get("ns_overlay", "None")
     migrated = {"IOB":"IOB + boluses", "Boluses":"IOB + boluses", "COB":"COB + carbs", "Carbs":"COB + carbs"}.get(old_overlay, old_overlay)
@@ -98,9 +94,10 @@ def graph_date_controls(view, metric):
         st.session_state.ns_overlay = migrated
         for key in ("ic", "isf", "basal", "target"):
             st.session_state[f"ns_overlay_{key}"] = migrated
-    overlay = overlay_col.selectbox("Overlay · right axis", choices,
+    st.session_state.setdefault(f"ns_overlay_{metric}",st.session_state.get("ns_overlay","None"))
+    overlay = overlay_col.pills("Overlay · right axis", choices, selection_mode="single", required=True,
         format_func=lambda option: "Temp targets" if option == "Nightscout targets" else option,
-        index=choices.index(st.session_state.get('ns_overlay','None')),key=f"ns_overlay_{metric}",
+        key=f"ns_overlay_{metric}",
         on_change=sync_graph_option,args=(metric,'ns_overlay'))
     same_scale = scale_col.toggle("Same axis scale", value=st.session_state.get('ns_same_scale',False),
         key=f"ns_same_scale_{metric}",disabled=overlay=='None',on_change=sync_graph_option,args=(metric,'ns_same_scale'),
@@ -111,4 +108,5 @@ def graph_date_controls(view, metric):
         help="Previous loaded day; switches to One day view and wraps at the ends.",width="stretch")
     next_col.button("Next →",key=f"ns_next_{metric}",on_click=cycle_day,args=(1,),disabled=disabled,
         help="Next loaded day; switches to One day view and wraps at the ends.",width="stretch")
+    st.caption('Dashed vertical lines mark changes in the active profile or draft’s selected setting.')
     return dict(view,overlay=overlay,same_scale=same_scale and overlay!='None')

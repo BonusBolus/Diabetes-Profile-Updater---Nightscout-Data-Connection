@@ -445,13 +445,13 @@ class EditorTests(unittest.TestCase):
             at.radio(key='ns_mode').set_value('Median + band').run(); self.clean()
             with patch('graph_view.render_graphs') as draw:
                 at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-                at.multiselect(key='ns_layers').set_value(['Glucose','Temporary basal','Boluses','Carbs','IOB','COB']).run()
+                at.button_group(key='ns_layers').set_value(['Glucose','Temporary basal','Boluses','Carbs','IOB','COB']).run()
                 self.clean()
             fig = draw.call_args_list[0].args[0][1]
             self.assertTrue(any(t.name=='Median glucose' for t in fig.data))
             self.assertEqual(at.session_state.draft,before)
             at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-            at.selectbox(key='ns_overlay_ic').set_value('Glucose').run(); self.clean()
+            at.button_group(key='ns_overlay_ic').set_value('Glucose').run(); self.clean()
             with patch('graph_view.render_graphs') as draw:
                 at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
                 at.button(key='ns_next_ic').click().run(); self.clean()

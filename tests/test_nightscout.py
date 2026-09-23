@@ -250,7 +250,7 @@ class TargetContinuityAndStyleTests(unittest.TestCase):
         targets=dataset_traces('target',loaded,[loaded['first']],'One day','mmol/L',True)
         self.assertEqual({t.line.color for t in targets},set(TARGET_COLORS.values()))
         self.assertTrue(all(t.y[0]==6.6 for t in targets))
-        self.assertEqual({v for t in targets for v in t.customdata},{'Activity','Eating Soon','Hypo','Custom'})
+        self.assertEqual({v.split(' · ')[0] for t in targets for v in t.customdata},{'Activity','Eating Soon','Hypo','Custom'})
         bolus=dataset_traces('bolus',loaded,[loaded['first']],'One day','mmol/L',True)
         smb,user=bolus
         self.assertEqual(smb.marker.symbol,'triangle-up')
