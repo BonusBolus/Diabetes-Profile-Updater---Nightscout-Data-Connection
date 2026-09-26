@@ -71,17 +71,17 @@ class ComparisonTests(unittest.TestCase):
             dict(time=start+timedelta(days=d),end=start+timedelta(days=d,hours=1),low=118.8,high=144,source='Temporary target',reason='Activity') for d in (0,1)])
         days=[loaded['first'],loaded['last']]
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,10],name='LenStandardV17'))
-        figs=graph_figures(profile,loaded,days,'Multiple days',['IOB','COB','Nightscout targets'],'mmol/L',True)
+        figs=graph_figures(profile,loaded,days,'Multiple days',['IOB + boluses','COB + carbs','Nightscout targets'],'mmol/L',True)
         for fig in figs[1:]:
-            self.assertEqual(sum(bool(t.showlegend) for t in fig.data),1)
+            self.assertEqual(sum(bool(t.showlegend) for t in fig.data),1 if fig.layout.title.text.startswith('Temp targets') else 2)
             for trace in fig.data:
                 self.assertNotIn('2026-',trace.name)
-                self.assertEqual(trace.line.dash,'solid')
+                if trace.mode and 'lines' in trace.mode:self.assertEqual(trace.line.dash,'solid')
                 self.assertTrue(trace.meta['date'])
             if fig.data[0].meta['kind']=='target':
-                self.assertEqual(fig.data[1].fill,'tonexty')
+                self.assertTrue(all(t.fill=='none' for t in fig.data))  # Unknown historical baseline: lines only.
             else:
-                self.assertTrue(all(t.fill=='tozeroy' for t in fig.data))
+                self.assertTrue(all(t.fill=='tozeroy' for t in fig.data if t.meta['kind'] in ('iob','cob')))
 
     def test_fullscreen_overlay_variants_keep_selected_median(self):
         from graph_view import navigation_bundle

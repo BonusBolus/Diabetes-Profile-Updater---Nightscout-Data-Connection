@@ -9,7 +9,7 @@ from nightscout import UTC, glucose_summary, local_points
 def continuous_summary(loaded, key, days, unit):
     frame=loaded['data'].get(key,pd.DataFrame())
     if key not in ('basal','basal_percent'):
-        return glucose_summary(frame,loaded['zone'],days,unit if key=='glucose' else 'mg/dL')
+        return glucose_summary(frame,loaded['zone'],days,unit if key in ('glucose','variable_sens') else 'mg/dL')
     # First aggregate each day's known rate duration within wall-clock bins.
     # Short intervals count for their actual duration, not their record count.
     totals={};selected=set(days);tz=ZoneInfo(loaded['zone'])
@@ -66,9 +66,10 @@ def hourly_events(loaded,key,days,exclude_smb=False):
             flags.append(bool(usable and full))
             labels.append('Unavailable' if not usable else 'Complete hour' if full else 'Partial hour')
         values.append(row);complete.append(flags);event_counts.append(events);status.append(labels)
-    medians=[];contributing=[]
+    medians=[];averages=[];contributing=[]
     for hour in range(24):
         observed=[row[hour] for row,flags in zip(values,complete) if flags[hour]]
         medians.append(float(np.median(observed)) if observed else None)
+        averages.append(float(np.mean(observed)) if observed else None)
         contributing.append(len(observed))
-    return dict(days=[str(day) for day in days],values=values,complete=complete,counts=event_counts,status=status,median=medians,contributing=contributing)
+    return dict(days=[str(day) for day in days],values=values,complete=complete,counts=event_counts,status=status,median=medians,average=averages,contributing=contributing)

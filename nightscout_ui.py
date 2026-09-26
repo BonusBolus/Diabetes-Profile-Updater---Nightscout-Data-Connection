@@ -7,7 +7,7 @@ import streamlit as st
 
 from nightscout import NightscoutError, load_nightscout
 from date_controls import day_calendar
-from nightscout_charts import LAYERS, OVERLAYS, OVERLAY_CHOICES, date_label
+from nightscout_charts import LAYERS, GROUP_KEYS, date_label
 
 
 def sidebar_controls(profile_zone):
@@ -50,63 +50,37 @@ def sidebar_controls(profile_zone):
             st.warning(warning)
         mode = st.radio("Nightscout view", ["One day", "Multiple days", "Median + band"], key="ns_mode")
         days = day_calendar(loaded, multiple=mode != "One day")
+        # Drop removed chart selections before creating the widget on a live reload.
+        if 'ns_layers' in st.session_state:
+            previous=st.session_state.ns_layers or []
+            renamed={'IOB':'IOB + boluses','Boluses':'IOB + boluses','COB':'COB + carbs','Carbs':'COB + carbs'}
+            migrated=[renamed.get(label,label) for label in previous]
+            migrated=list(dict.fromkeys(label for label in migrated if label in LAYERS))
+            if migrated!=previous:st.session_state.ns_layers=migrated
         layers = st.pills("Data layers", list(LAYERS), selection_mode="multi", default=["Glucose"], key="ns_layers")
-        overlay = st.session_state.get("ns_overlay", "None")
-        show_targets = st.checkbox("Show temporary targets on glucose", value=True, key="ns_show_targets")
+        if "Custom graph" in layers:
+            st.caption("Choose recorded data and profile schedules directly above the Custom graph, including in expanded view. Schedules use the current draft and selected references; they are not historical active-profile records.")
+        overlay = "None"
+        show_targets = True  # Controlled locally on the graph, including fullscreen.
         for label in set(layers):
             key = LAYERS[label]
-            if (key not in loaded["data"] or loaded["data"][key].empty) and (key != "basal" or loaded["data"]["basal_percent"].empty):
+            if key == 'custom':continue
+            if all(k not in loaded["data"] or loaded["data"][k].empty for k in GROUP_KEYS.get(key, [key])) and (key != "basal" or loaded["data"]["basal_percent"].empty):
                 st.caption(f"No {label.lower()} records were returned for the loaded dates.")
         if mode == "Median + band":
-            st.caption("Glucose, temp basal, IOB and COB: median and 25–75% band in 5-minute bins, with one contribution per day. Missing intervals stay blank. Temp basal summarizes recorded temp rates only. Bolus and carb heatmaps show hourly totals; histograms show the median hourly total across complete hours. Zero means no event returned; unavailable and future hours stay blank.")
+            st.caption("Glucose, temp basal, IOB and COB: median and 25–75% band in 5-minute bins, with one contribution per day. Missing intervals stay blank. Temp basal summarizes recorded temp rates only. Bolus and carb heatmaps show hourly totals; bar plots default to the average hourly total across complete hours, with an in-graph Median toggle. Zero means no event returned; unavailable and future hours stay blank.")
         st.caption("Temporary targets use rectangular shading toward the historical profile target range. Missing target history: line only. Reason colors: Eating Soon orange, Activity cyan, Hypo red, other/missing green. The 4–10 band is a fixed guide.")
+        if 'Variable sensitivity' in layers:
+            st.caption("Variable sensitivity is the uploaded variable_sens, not the scheduled ISF. Values are displayed in the profile's glucose units per U. Missing fields stay blank.")
         st.caption("Temporary basal shows recorded intervals, not a reconstructed delivery total. Gaps are not filled with your draft basal. IOB/COB are uploaded values.")
         st.caption("Select historical days manually; they are not automatically matched to profile versions. Editing your profile never changes the recorded data.")
         return {"loaded": loaded, "days": sorted(days), "mode": mode, "layers": layers, "overlay": overlay, "show_targets": show_targets}
 
 
-def cycle_day(direction):
-    loaded = st.session_state.ns_loaded
-    dates = [loaded["first"] + timedelta(days=i) for i in range((loaded["last"]-loaded["first"]).days+1)]
-    current = st.session_state.get("ns_day", dates[-1])
-    if st.session_state.get("ns_mode") != "One day":
-        selected = st.session_state.get("ns_days", dates)
-        if selected:
-            current = max(selected) if direction > 0 else min(selected)
-    index = dates.index(current) if current in dates else 0
-    st.session_state.ns_day = dates[(index+direction) % len(dates)]
-    st.session_state.ns_mode = "One day"
-
-
-def sync_graph_option(metric, field):
-    value = st.session_state[f"{field}_{metric}"]
-    st.session_state[field] = value
-    for other in ('ic','isf','basal','target'):
-        st.session_state[f"{field}_{other}"] = value
-
 
 def graph_date_controls(view, metric):
-    overlay_col, scale_col, date_col, previous_col, next_col = st.columns([4.5,1.5,2,1.2,1.2],vertical_alignment="bottom")
-    choices = OVERLAY_CHOICES
-    old_overlay = st.session_state.get("ns_overlay", "None")
-    migrated = {"IOB":"IOB + boluses", "Boluses":"IOB + boluses", "COB":"COB + carbs", "Carbs":"COB + carbs"}.get(old_overlay, old_overlay)
-    if migrated != old_overlay:
-        st.session_state.ns_overlay = migrated
-        for key in ("ic", "isf", "basal", "target"):
-            st.session_state[f"ns_overlay_{key}"] = migrated
-    st.session_state.setdefault(f"ns_overlay_{metric}",st.session_state.get("ns_overlay","None"))
-    overlay = overlay_col.pills("Overlay · right axis", choices, selection_mode="single", required=True,
-        format_func=lambda option: "Temp targets" if option == "Nightscout targets" else option,
-        key=f"ns_overlay_{metric}",
-        on_change=sync_graph_option,args=(metric,'ns_overlay'))
-    same_scale = scale_col.toggle("Same axis scale", value=st.session_state.get('ns_same_scale',False),
-        key=f"ns_same_scale_{metric}",disabled=overlay=='None',on_change=sync_graph_option,args=(metric,'ns_same_scale'),
-        help="Use identical numeric limits on both axes. This does not convert units or make different quantities equivalent.")
-    date_col.caption(date_label(view['days']) + " · " + view['loaded']['zone'])
-    disabled = view['loaded']['first'] == view['loaded']['last'] and view['mode'] == 'One day'
-    previous_col.button("← Previous",key=f"ns_previous_{metric}",on_click=cycle_day,args=(-1,),disabled=disabled,
-        help="Previous loaded day; switches to One day view and wraps at the ends.",width="stretch")
-    next_col.button("Next →",key=f"ns_next_{metric}",on_click=cycle_day,args=(1,),disabled=disabled,
-        help="Next loaded day; switches to One day view and wraps at the ends.",width="stretch")
-    st.caption('Dashed vertical lines mark changes in the active profile or draft’s selected setting.')
-    return dict(view,overlay=overlay,same_scale=same_scale and overlay!='None')
+    # All graph controls live in one viewer, also used in fullscreen. Streamlit
+    # controls here previously disagreed with the locally selected overlay.
+    st.caption(date_label(view['days']) + ' · ' + view['loaded']['zone'] +
+               ' · Dashed vertical lines mark changes in the selected profile setting.')
+    return dict(view, overlay='None', same_scale=False)

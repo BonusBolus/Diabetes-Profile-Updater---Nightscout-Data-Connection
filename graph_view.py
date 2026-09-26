@@ -3,6 +3,8 @@ from functools import lru_cache
 from datetime import timedelta
 import json
 import hashlib
+from pathlib import Path
+from custom_graph import custom_bundle
 
 from plotly.offline import get_plotlyjs
 import streamlit as st
@@ -18,7 +20,10 @@ def plotly_script():
     return get_plotlyjs()
 
 
-def navigation_bundle(profile, view, unit, dark):
+def navigation_bundle(profile, view, unit, dark, profiles=None, metric=None, custom_profiles=None):
+    initial_targets=view.get('show_targets',True)
+    initial_scale=view.get('same_scale',False)
+    view=dict(view,show_targets=True,same_scale=False)
     loaded = view['loaded']
     days = [loaded['first']+timedelta(days=i) for i in range((loaded['last']-loaded['first']).days+1)]
     # One batch of dated traces lets the browser filter locally without an app
@@ -39,21 +44,24 @@ def navigation_bundle(profile, view, unit, dark):
             fig = hourly_figure(loaded,'bolus',selected,dark,exclude_smb=True)
             add_profile_guides(fig,(profile.layout.meta or {}).get('profile_changes',[]),dark)
             bolus_variants[label] = json.loads(fig.to_json())
-    return dict(bolus_without_smb=bolus_variants, days=[day.isoformat() for day in days], selected=[day.isoformat() for day in view['days']],
-                mode=view['mode'], same_scale=view.get('same_scale',False), unit=unit,
+    return dict(custom=custom_bundle(loaded,view['days'],days,view['mode'],unit,dark,custom_profiles if custom_profiles is not None else profiles or {}) if 'Custom graph' in view['layers'] else None,
+                profiles={key:json.loads(fig.to_json()) for key,fig in (profiles or {}).items()},metric=metric,
+                show_targets=initial_targets,bolus_without_smb=bolus_variants, days=[day.isoformat() for day in days], selected=[day.isoformat() for day in view['days']],
+                mode=view['mode'], same_scale=initial_scale, unit=unit,
                 glucose_overlay=view.get('overlay')=='Glucose', overlay=view.get('overlay','None'), overlays=overlays,
                 figures=[json.loads(fig.to_json()) for fig in daily],
                 summaries=cached(loaded,'daily_stats',(tuple(days),unit),lambda: daily_summary(loaded,days,unit)))
 
 
-def prepared_graphs(profile, view, unit, dark):
+def prepared_graphs(profile, view, unit, dark, profiles=None, metric=None, custom_profiles=None):
     # The loaded snapshot is immutable until manual refresh. Profile edits only
     # rebuild the viewer; recorded traces and statistics remain reusable.
     key=(profile.to_json(),tuple(view['days']),view['mode'],tuple(view['layers']),
-         view.get('overlay','None'),view.get('show_targets',True),view.get('same_scale',False),unit,dark)
+         view.get('overlay','None'),view.get('show_targets',True),view.get('same_scale',False),unit,dark,metric,tuple((k,f.to_json()) for k,f in (profiles or {}).items()),
+         tuple((k,f.to_json()) for k,f in (custom_profiles or {}).items()))
     def build():
-        figures=graph_figures(profile,**view,unit=unit,dark=dark)
-        navigation=navigation_bundle(profile,view,unit,dark)
+        figures=graph_figures(profile,**dict(view,show_targets=True,same_scale=False),unit=unit,dark=dark)
+        navigation=navigation_bundle(profile,view,unit,dark,profiles,metric,custom_profiles)
         navigation['render_key']=hashlib.sha256(repr(key).encode()).hexdigest()
         return figures,navigation
     return cached(view['loaded'],'prepared',key,build,limit=3)
@@ -74,8 +82,10 @@ html,body {margin:0;height:100%;font-family:Arial,sans-serif;background:BACKGROU
 #overlay-control {font-size:12px;display:flex;align-items:center;gap:5px;}
 #overlay-select {display:flex;flex-wrap:wrap;gap:4px;}
 button[aria-pressed="true"] {outline:2px solid #22a6bb;}
-.bolus-controls {padding:5px 12px;display:flex;align-items:center;gap:10px;font-size:12px;}
+.bolus-controls {padding:5px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:10px;font-size:12px;}
 .bolus-controls button {background:transparent;color:inherit;border:1px solid #80808080;border-radius:5px;padding:5px 10px;cursor:pointer;}
+.custom-options {display:flex;flex-wrap:wrap;gap:5px;padding:8px 0;}
+.custom-help {flex-basis:100%;font-size:12px;opacity:.8;}
 #date-calendar {position:absolute;z-index:20;top:42px;left:10px;background:SURFACE;border:1px solid GRID;border-radius:6px;padding:12px;max-height:65vh;overflow:auto;}
 .calendar-grid {display:grid;grid-template-columns:repeat(7,32px);gap:3px;}
 .calendar-grid button {padding:5px 2px!important;}
@@ -104,6 +114,8 @@ button[aria-pressed="true"] {outline:2px solid #22a6bb;}
 </style></head><body><div id="viewer"><div id="toolbar"><div id="toolbar-left"><button id="expand" type="button">⛶ Expand graphs</button>
 <button id="previous-day" type="button" aria-label="Previous loaded day">← Previous</button>
 <button id="day-label" type="button" aria-label="Choose loaded day" aria-expanded="false"></button><div id="date-calendar" hidden></div><button id="next-day" type="button" aria-label="Next loaded day">Next →</button>
+<div id="metric-select" role="group" aria-label="Profile setting"></div><button id="show-targets" type="button">Temp targets: on</button>
+<button id="same-scale" type="button" title="Match numeric limits; this does not convert units.">Same axis scale: off</button>
 <div id="overlay-control">Overlay <div id="overlay-select" role="group" aria-label="Nightscout overlay on profile"></div></div></div>
 <div id="hover-card" role="status" aria-live="polite">Hover a point for details</div></div>
 <details id="daily-summary"><summary id="summary-title">Daily summary</summary><div id="summary-body"></div></details>
@@ -117,7 +129,18 @@ const previousDay=document.getElementById('previous-day'),nextDay=document.getEl
 const dayLabel=document.getElementById('day-label'),dateCalendar=document.getElementById('date-calendar');
 const overlayControl=document.getElementById('overlay-control'),overlaySelect=document.getElementById('overlay-select');
 let currentOverlay=navigation ? navigation.overlay || 'None' : 'None', dateCycled=false, excludeSMB=false;
-const overlayButtons=[],bolusButtons=[];
+const overlayButtons=[],bolusButtons=[],metricButtons=[],targetButtons=[],hourlyButtons=[];
+const hourlyModes={bolus:"Average",carbs:"Average"};
+let sameScale=navigation?.same_scale || false;
+const scaleButton=document.getElementById("same-scale");
+scaleButton.addEventListener("click",toggleScale);
+let currentMetric=navigation?.metric || null, showTargets=navigation?.show_targets !== false;
+const metricSelect=document.getElementById('metric-select'),targetButton=document.getElementById('show-targets');
+targetButtons.push(targetButton);targetButton.addEventListener('click',toggleTargets);
+Object.entries(navigation?.profiles || {}).forEach(([key,spec])=>{
+  const button=document.createElement('button');button.type='button';button.value=key;button.textContent=spec.layout.title.text.split(' · ')[0];
+  button.addEventListener('click',()=>changeMetric(key));metricSelect.appendChild(button);metricButtons.push(button);
+});
 if(navigation && navigation.overlays) {
   Object.keys(navigation.overlays).forEach(value=>{const option=document.createElement('button');option.type='button';option.value=value;option.textContent=value==='Nightscout targets'?'Temp targets':value;option.addEventListener('click',()=>changeOverlay(value));overlaySelect.appendChild(option);overlayButtons.push(option);});
 } else overlayControl.hidden=true;
@@ -149,18 +172,40 @@ function updateTargetNote(div,index) {
   const note=targetNotes[index];
   note.hidden=!div.data.some(trace=>trace.meta?.kind==='target');
   note.textContent='Shading reaches the historical profile target range active at that time, from Nightscout—not the draft. Dotted sides mark interval boundaries. Missing target history: line only.';
+
 }
+__CUSTOM_GRAPH__
 const panels = document.getElementById('panels');
+const panelCards={},panelOrder=[],moveButtons=[];
 const card = document.getElementById('hover-card');
 const expand = document.getElementById('expand');
 for(let i=1;i<specs.length;i++) {
-  if(specs[i].layout.meta?.kind==='hourly' && specs[i].layout.meta.dataset==='bolus' && navigation?.bolus_without_smb?.selected) {
-    const bar=document.createElement('div');bar.className='bolus-controls';
-    const button=document.createElement('button');button.type='button';button.textContent='Exclude SMB';button.addEventListener('click',()=>toggleSMB(i));bar.appendChild(button);bolusButtons.push(button);
-    const note=document.createElement('span');note.textContent='Grid + histogram · unknown boluses remain included';bar.appendChild(note);panels.appendChild(bar);
+  const panel=document.createElement('section');panelCards[i]=panel;panelOrder.push(i);panels.appendChild(panel);
+  const orderBar=document.createElement('div');orderBar.className='bolus-controls';panel.appendChild(orderBar);
+  for(const [direction,label] of [[-1,'↑'],[1,'↓']]) {
+    const button=document.createElement('button');button.type='button';button.textContent=label;
+    button.title='Move '+specs[i].layout.title.text.split(' · ')[0]+(direction<0?' up':' down');
+    button.setAttribute('aria-label',button.title);button.addEventListener('click',()=>movePanel(i,direction));
+    moveButtons.push({button,index:i,direction});orderBar.appendChild(button);
   }
-  const div=document.createElement('div');div.className='graph';panels.appendChild(div);graphs.push(div);
-  const note=document.createElement('p');note.className='target-note';note.hidden=true;panels.appendChild(note);targetNotes.push(note);
+  if(specs[i].layout.meta?.kind==='custom')setupCustomControls(orderBar);
+  if(specs[i].layout.title.text.startsWith('Glucose ·')) {
+    const button=document.createElement('button');button.type='button';
+    button.addEventListener('click',toggleTargets);targetButtons.push(button);orderBar.appendChild(button);
+  }
+  if(specs[i].layout.meta?.kind==='hourly') {
+    const bar=orderBar;
+    const average=document.createElement('button');average.type='button';average.value=specs[i].layout.meta.dataset;
+    average.title='Switch the hourly bars between median and arithmetic mean of complete daily hour totals. Zero-event hours count; missing and partial hours do not.';
+    average.addEventListener('click',()=>toggleHourly(i));bar.appendChild(average);hourlyButtons.push(average);
+    if(specs[i].layout.meta.dataset==='bolus' && navigation?.bolus_without_smb?.selected) {
+      const button=document.createElement('button');button.type='button';button.textContent='Exclude SMB';button.addEventListener('click',()=>toggleSMB(i));bar.appendChild(button);bolusButtons.push(button);
+      const note=document.createElement('span');note.textContent='Grid + histogram · unknown boluses remain included';bar.appendChild(note);
+    }
+
+  }
+  const div=document.createElement('div');div.className='graph';panel.appendChild(div);graphs.push(div);
+  const note=document.createElement('p');note.className='target-note';note.hidden=true;panel.appendChild(note);targetNotes.push(note);
 }
 let syncing=false;
 const guides=[], highlights=[];
@@ -220,6 +265,136 @@ let jobs=Promise.resolve(), starting=false, resizePending=false, lastSize='';
 let intersects=typeof IntersectionObserver==='undefined';
 function enqueue(task) {const next=jobs.then(task);jobs=next.catch(()=>{});return next;}
 function visibleWidth() {return intersects ? Math.floor(viewer.getBoundingClientRect().width) : 0;}
+function axisPolicy(view,index) {
+  const {data,layout}=view;
+  const valuesFor=axis=>data.filter(t=>(t.yaxis || 'y')===axis && t.visible!==false).flatMap(t=>t.y || []).filter(Number.isFinite);
+  if(index===0) {
+    const originalGlucoseRange=currentOverlay==='Glucose'?layout.yaxis2?.range:null;
+    for(const axis of [layout.yaxis,layout.yaxis2].filter(Boolean)) {
+      delete axis.range;delete axis.matches;delete axis.autorangeoptions;axis.autorange=true;
+    }
+    if(layout.yaxis2 && currentOverlay==='Glucose') {
+      const scale=navigation.unit==='mmol/L'?1:18;
+      const glucose=data.filter(t=>t.meta?.kind==='glucose' || t.meta?.dataset==='glucose').flatMap(t=>t.y || []).filter(Number.isFinite);
+      const peak=Math.max(0,...glucose),maximum=peak>20*scale?Math.ceil(peak*1.05/scale)*scale:20*scale;
+      layout.yaxis2.range=[0,Math.max(maximum,originalGlucoseRange?.[1] || 0)];layout.yaxis2.autorange=false;
+    }
+    if(layout.yaxis2 && currentOverlay==='Nightscout targets') {
+      layout.yaxis2.range=[0,navigation.unit==='mmol/L'?20:360];layout.yaxis2.autorange=false;
+    }
+  }
+  if(index===0 && sameScale && layout.yaxis2) {
+    const values=[0,...valuesFor('y'),...valuesFor('y2'),...(layout.yaxis2.range || [])];
+    const low=Math.min(...values),high=Math.max(...values),span=Math.max(1,high-low);
+    const limits=[low<0?low-.05*span:0,high+(data.some(t=>t.mode?.includes('text')) ? .20 : .08)*span];
+    layout.yaxis.range=limits;layout.yaxis2.range=limits;layout.yaxis.autorange=false;layout.yaxis2.autorange=false;
+  }
+  // Any matched limits already have label headroom. Independent axes need it too.
+  for(const name of new Set(data.filter(t=>t.mode?.includes('text')).map(t=>t.yaxis || 'y'))) {
+    const axis=layout['yaxis'+name.slice(1)],values=valuesFor(name);
+    if(axis.autorange!==false && values.length)axis.autorangeoptions={include:Math.max(...values)+.2*Math.max(1,Math.max(...values)-Math.min(0,...values))};
+  }
+}
+function movePanel(index,direction) {
+  if(!ready || syncing)return;
+  const from=panelOrder.indexOf(index),to=from+direction;
+  if(to<0 || to>=panelOrder.length)return;
+  [panelOrder[from],panelOrder[to]]=[panelOrder[to],panelOrder[from]];
+  panelOrder.forEach(key=>panels.appendChild(panelCards[key]));clearHover();controls();
+}
+async function toggleScale() {
+  if(!ready || syncing || currentOverlay==='None')return;
+  return enqueue(async()=>{
+    const previous=sameScale;syncing=true;controls();clearHover();
+    try {sameScale=!sameScale;await redrawLocal();}
+    catch(error){sameScale=previous;card.textContent='Could not change axis scale.';}
+    finally {syncing=false;controls();}
+  });
+}
+function decorate(source,index) {
+  const view=JSON.parse(JSON.stringify(source)),profile=navigation?.profiles?.[currentMetric];
+  if(view.layout.meta?.kind==='custom')composeCustom(view);
+  if(profile) {
+    const guides=(profile.layout.shapes || []).filter(s=>s.name==='Profile change');
+    view.layout.shapes=(view.layout.shapes || []).filter(s=>s.name!=='Profile change').concat(guides);
+    view.layout.meta={...view.layout.meta,profile_changes:profile.layout.meta?.profile_changes || []};
+    if(index===0) {
+      view.data=profile.data.map(t=>({...t,yaxis:'y',xaxis:'x'})).concat(view.data.filter(t=>t.meta?.kind!=='profile'));
+      view.layout.title.text=profile.layout.title.text.split(' · ')[0]+' · '+view.layout.title.text.split(' · ').slice(1).join(' · ');
+      view.layout.yaxis.title=profile.layout.yaxis.title;
+      view.layout.yaxis.rangemode=profile.layout.yaxis.rangemode;
+      delete view.layout.yaxis.range;view.layout.yaxis.autorange=true;
+      view.layout.uirevision=currentMetric+':'+currentOverlay;
+    }
+  }
+  const glucose=index===0?currentOverlay==='Glucose':view.layout.title.text.startsWith('Glucose ·');
+  if(glucose && !showTargets)view.data=view.data.filter(t=>!['target','target_fill','target_boundary'].includes(t.meta?.kind));
+  if(view.layout.meta?.kind==='hourly' && !view.layout.meta.single_day) {
+    const mode=hourlyModes[view.layout.meta.dataset] || 'Median';
+    const heat=view.data.find(t=>t.meta?.kind==='hourly_heatmap'),bars=view.data.find(t=>t.meta?.kind==='hourly_histogram');
+    bars.y=Array.from({length:24},(_,hour)=>{
+      const values=heat.z.map((row,i)=>heat.customdata[i][hour]?.[5]?row[hour]:null).filter(Number.isFinite);
+      if(!values.length)return null;
+      if(mode==='Average')return values.reduce((sum,value)=>sum+value,0)/values.length;
+      values.sort((a,b)=>a-b);const mid=Math.floor(values.length/2);
+      return values.length%2?values[mid]:(values[mid-1]+values[mid])/2;
+    });
+    bars.name=mode+' hourly '+heat.meta.label.toLowerCase();bars.meta.label=bars.name;
+    view.layout.yaxis2.title.text=mode+' '+heat.meta.unit;
+    view.layout.meta.statistic=mode;
+  }
+  axisPolicy(view,index);
+  compactLegend(view.data);
+  return view;
+}
+function localSource(index) {
+  if(index===0 && navigation?.overlays)return navigation.overlays[currentOverlay][dateCycled?'daily':'selected'];
+  if(excludeSMB && specs[index].layout.meta?.kind==='hourly' && specs[index].layout.meta.dataset==='bolus')return navigation.bolus_without_smb[dateCycled?'daily':'selected'];
+  return dateCycled?navigation.figures[index]:specs[index];
+}
+async function redrawLocal() {
+  const range=graphs[0]._fullLayout.xaxis.range.slice();
+  const views=graphs.map((div,i)=>{
+    const source=localSource(i);
+    const view=decorate(dateCycled?dailyView(source,i,selectedDays[0],range):source,i);
+    view.layout=sizedLayout(view,i);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;
+    return view;
+  });
+  await Promise.all(graphs.map((div,i)=>Plotly.react(div,views[i].data,views[i].layout)));
+}
+async function toggleTargets() {
+  if(!ready || syncing)return;
+  return enqueue(async()=>{
+    syncing=true;controls();clearHover();
+    const previous=showTargets;
+    try {showTargets=!showTargets;await redrawLocal();}
+    catch(error){showTargets=previous;card.textContent='Could not update graph option.';}
+    finally{syncing=false;controls();}
+  });
+}
+async function toggleHourly(index) {
+  if(!ready || syncing || dateCycled)return;
+  return enqueue(async()=>{
+    const key=specs[index].layout.meta.dataset,previous=hourlyModes[key];
+    syncing=true;controls();clearHover();
+    try {
+      hourlyModes[key]=previous==='Median'?'Average':'Median';
+      const view=decorate(localSource(index),index),range=graphs[0]._fullLayout.xaxis.range.slice();
+      view.layout=sizedLayout(view,index);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;
+      await Plotly.react(graphs[index],view.data,view.layout);
+    } catch(error){hourlyModes[key]=previous;card.textContent='Could not update hourly statistic.';}
+    finally{syncing=false;controls();}
+  });
+}
+async function changeMetric(metric) {
+  if(!ready || syncing)return;
+  return enqueue(async()=>{
+    const previous=currentMetric;syncing=true;controls();clearHover();
+    try {currentMetric=metric;await redrawLocal();}
+    catch(error){currentMetric=previous;card.textContent='Could not change profile setting.';}
+    finally{syncing=false;controls();}
+  });
+}
 function sizedLayout(spec, index) {
   const layout=JSON.parse(JSON.stringify(spec.layout));
   layout.width=Math.max(1, panels.clientWidth || visibleWidth());
@@ -227,9 +402,16 @@ function sizedLayout(spec, index) {
   return layout;
 }
 function controls() {
+  customControls();
   previousDay.disabled=!ready || syncing || !navigation || navigation.days.length<2;
   nextDay.disabled=previousDay.disabled;dayLabel.disabled=!ready || syncing || !navigation;
   overlayButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(button.value===currentOverlay));});
+  hourlyButtons.forEach(button=>{button.disabled=!ready || syncing || dateCycled;button.textContent=dateCycled?'Bars: selected day':'Bars: '+hourlyModes[button.value];button.setAttribute('aria-pressed',String(!dateCycled && hourlyModes[button.value]==='Average'));});
+  scaleButton.disabled=!ready || syncing || currentOverlay==='None';scaleButton.textContent='Same axis scale: '+(sameScale?'on':'off');scaleButton.setAttribute('aria-pressed',String(sameScale));
+  moveButtons.forEach(({button,index,direction})=>{const position=panelOrder.indexOf(index)+direction;button.disabled=!ready || syncing || position<0 || position>=panelOrder.length;});
+  targetButton.hidden=currentOverlay!=='Glucose';
+  metricButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(button.value===currentMetric));});
+  targetButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(showTargets));button.textContent='Temp targets: '+(showTargets?'on':'off');});
   bolusButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(excludeSMB));button.textContent=excludeSMB?'Exclude SMB: on':'Exclude SMB: off';});
 }
 function compactLegend(data) {
@@ -267,8 +449,8 @@ async function startPlots() {
     if(document.fonts)await document.fonts.ready;
     await enqueue(async()=>{
       if(visibleWidth()<50)return;
-      await Promise.all(graphs.map((div,i)=>Plotly.newPlot(div,specs[i].data,sizedLayout(specs[i],i),
-        {responsive:false,displaylogo:false,scrollZoom:false,toImageButtonOptions:{format:'png',scale:2}})));
+      await Promise.all(graphs.map((div,i)=>{const view=decorate(specs[i],i);return Plotly.newPlot(div,view.data,sizedLayout(view,i),
+        {responsive:false,displaylogo:false,scrollZoom:false,toImageButtonOptions:{format:'png',scale:2}});}));
       graphs.forEach((div,index)=>{
         const guide=document.createElement('div');guide.className='time-guide';div.appendChild(guide);guides.push(guide);
         const marker=document.createElement('div');marker.className='point-highlight';div.appendChild(marker);highlights.push(marker);
@@ -294,12 +476,16 @@ async function startPlots() {
 }
 function dailyView(spec,index,day,range) {
   const clone=JSON.parse(JSON.stringify(spec));
+  if(clone.layout.meta?.kind==='custom') {
+    clone.layout=sizedLayout(clone,index);clone.layout.meta.custom_day=day;clone.layout.xaxis.range=range;return clone;
+  }
   const data=clone.data.filter(trace=>!trace.meta?.date || trace.meta.date===day);
   compactLegend(data);
   const layout=sizedLayout(clone,index);
   layout.title.text=layout.title.text.replace(/[0-9]{4}-[0-9]{2}-[0-9]{2}(?: – [0-9]{4}-[0-9]{2}-[0-9]{2}(?: · selected days)?)?/g,day);
   layout.xaxis.range=range;layout.xaxis.autorange=false;layout.annotations=[];
   if(layout.meta?.kind==='hourly') {
+    layout.meta.single_day=true;
     const heat=data.find(t=>t.meta?.kind==='hourly_heatmap');
     const bars=data.find(t=>t.meta?.kind==='hourly_histogram');
     const row=heat.y.indexOf(day);
@@ -323,16 +509,9 @@ function dailyView(spec,index,day,range) {
   const scale=navigation.unit==='mmol/L'?1:18;
   let peak=0;data.filter(t=>t.meta?.kind==='glucose').forEach(t=>t.y.forEach(y=>{if(y!==null)peak=Math.max(peak,y);}));
   const maximum=Math.max(20*scale,peak>20*scale?Math.ceil(peak*1.05/scale)*scale:20*scale);
-  [layout.yaxis,layout.yaxis2].filter(Boolean).forEach(axis=>{delete axis.range;axis.autorange=true;delete axis.matches;delete axis.autorangeoptions;});
+  [layout.yaxis,layout.yaxis2,layout.yaxis3].filter(Boolean).forEach(axis=>{delete axis.range;axis.autorange=true;delete axis.matches;delete axis.autorangeoptions;});
   if(isGlucose){const axis=index===0?layout.yaxis2:layout.yaxis;axis.range=[0,maximum];axis.autorange=false;}
   if(isTarget){const axis=index===0?layout.yaxis2:layout.yaxis;axis.range=[0,20*scale];axis.autorange=false;}
-  if(index===0 && navigation.same_scale && layout.yaxis2){
-    let low=0,high=isGlucose?maximum:isTarget?20*scale:0;
-    data.forEach(t=>{if(Array.isArray(t.y))t.y.forEach(y=>{if(Number.isFinite(y)){low=Math.min(low,y);high=Math.max(high,y);}});});
-    const padding=data.some(t=>t.mode?.includes('text')) ? .20 : .08;
-    const span=Math.max(high-low,1),limits=[low<0?low-.05*span:0,high+padding*span];
-    layout.yaxis.range=limits;layout.yaxis2.range=limits;layout.yaxis.autorange=false;layout.yaxis2.autorange=false;layout.yaxis2.matches='y';
-  }
   // Recompute per displayed day; do not retain a larger day's label padding.
   const labelAxes=new Set(data.filter(t=>t.mode?.includes('text')).map(t=>t.yaxis || 'y'));
   labelAxes.forEach(name=>{
@@ -369,7 +548,7 @@ async function toggleSMB(index) {
     syncing=true;controls();clearHover();
     try {
       const source=next?navigation.bolus_without_smb[dateCycled?'daily':'selected']:(dateCycled?navigation.figures[index]:specs[index]);
-      const view=dateCycled?dailyView(source,index,selectedDays[0],range):JSON.parse(JSON.stringify(source));
+      const view=decorate(dateCycled?dailyView(source,index,selectedDays[0],range):source,index);
       view.layout=sizedLayout(view,index);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;
       await Plotly.react(graphs[index],view.data,view.layout);excludeSMB=next;
     } catch(error) {card.textContent='Could not update SMB filter.';}
@@ -387,7 +566,7 @@ async function cycleDay(direction,requestedDay=null) {
       const source=navigation.figures.slice();
       if(excludeSMB)source.forEach((spec,i)=>{if(spec.layout.meta?.kind==='hourly' && spec.layout.meta.dataset==='bolus')source[i]=navigation.bolus_without_smb.daily;});
       if(navigation.overlays)source[0]=navigation.overlays[currentOverlay].daily;
-      const views=source.map((spec,i)=>dailyView(spec,i,day,range));
+      const views=source.map((spec,i)=>decorate(dailyView(spec,i,day,range),i));
       await Promise.all(graphs.map((div,i)=>Plotly.react(div,views[i].data,views[i].layout)));
       selectedDays=[day];dateCycled=true;updateSummary();graphs.forEach(tidyLabels);
     } catch(error) {card.textContent='Could not change the displayed day. Reopen the graph view.';}
@@ -409,6 +588,7 @@ async function changeOverlay(requested) {
         view.layout=sizedLayout(view,0);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;
         view.layout.uirevision='overlay:'+currentOverlay;
       }
+      view=decorate(view,0);
       await Plotly.react(graphs[0],view.data,view.layout);tidyLabels(graphs[0]);
     } catch(error) {currentOverlay=previous;card.textContent='Could not change overlay. Reopen the graph view.';}
     finally {syncing=false;controls();}
@@ -431,7 +611,7 @@ if(typeof IntersectionObserver!=='undefined')new IntersectionObserver(entries=>{
   scheduleLayout();
 }).observe(viewer);
 controls();startPlots();
-</script></body></html>""".replace('__VIEWER_PAYLOAD__',payload_json,1)
+</script></body></html>""".replace('__CUSTOM_GRAPH__',Path(__file__).with_name('custom_graph.js').read_text(),1).replace('__VIEWER_PAYLOAD__',payload_json,1)
 
 
 def render_graphs(figures, dark, navigation=None, cache=None):

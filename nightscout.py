@@ -130,7 +130,7 @@ class NightscoutClient:
 
 
 def normalize_data(entries, treatments, statuses, start, end):
-    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob")}
+    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob", "variable_sens")}
     temps, targets, warnings = [], [], []
     rejected = 0
     def add(key, at, value, label=""):
@@ -211,10 +211,15 @@ def normalize_data(entries, treatments, statuses, start, end):
         suggested = openaps.get("suggested", {})
         if isinstance(suggested, dict) and "COB" in suggested:
             add("cob", timestamp(suggested.get("timestamp")) or at, suggested["COB"], row.get("device", ""))
+        if isinstance(suggested, dict):
+            sample_time = timestamp(suggested.get('timestamp')) or at
+            value = numeric(suggested.get('variable_sens'))
+            if value is not None and value > 0:
+                add('variable_sens', sample_time, value, 'openaps.suggested.variable_sens')
     data = {}
     for key, values in points.items():
         frame = pd.DataFrame(values, columns=["time", "value", "label"]).sort_values("time")
-        if key in ("glucose", "iob", "cob"):
+        if key not in ("bolus", "carbs"):
             frame = frame.drop_duplicates("time", keep="last")
         data[key] = frame.reset_index(drop=True)
     intervals = {"basal": [], "basal_percent": []}
@@ -287,7 +292,7 @@ def local_points(frame, zone, days):
     result = frame.copy()
     times = pd.to_datetime(result["time"], utc=True).dt.tz_convert(zone)
     result["day"] = times.dt.date
-    result["minute"] = times.dt.hour * 60 + times.dt.minute + times.dt.second / 60
+    result["minute"] = times.dt.hour * 60 + times.dt.minute + times.dt.second / 60 + times.dt.microsecond / 60000000
     result["time"] = times
     return result[result["day"].isin(days)].sort_values("time")
 

@@ -6,11 +6,13 @@ import json
 import os
 from pathlib import Path
 import zipfile
+from html import escape
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from appearance import COLORS, LIGHT_COLORS, palette, reference_color, sync_native_theme
+from aaps_settings import SETTINGS, display_settings
+from appearance import COLORS, LIGHT_COLORS, palette, reference_color, reference_identity_colors, sync_native_theme
 from comparison_tables import comparison_table, styled_comparison
 from editor_history import record_edit, reset_history, restore_edit
 from nightscout_charts import graph_figures, schedule_changes, add_profile_guides
@@ -28,6 +30,7 @@ st.set_page_config(page_title="Profile Studio", page_icon="◷", layout="wide")
 dark = st.session_state.get("dark_mode", st.get_option("theme.base") == "dark")
 theme = palette(dark)
 metric_colors = COLORS if dark else LIGHT_COLORS
+source_colors = reference_identity_colors(dark)
 st.markdown("""<style>
 .block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1500px;}
 div[data-testid="stMetric"] {background:var(--secondary-background-color); border:1px solid #80808040;
@@ -37,6 +40,11 @@ h1 {letter-spacing:-.04em;} h3 {letter-spacing:-.02em;}
 st.markdown("<style>" + "".join(
     f'[data-testid="stTabs"] [role="tab"]:nth-child({index}) {{color:{metric_colors[metric]};}}'
     for index, metric in enumerate(METRICS, 2)) + "</style>", unsafe_allow_html=True)
+
+st.markdown('<style>'+''.join(
+    f'.st-key-{key} [data-baseweb="select"] * {{color:{source_colors[role]} !important;}}'
+    for role,keys in [('ref1',('reference_category','reference_id')),('ref2',('second_reference_category','second_reference_id'))]
+    for key in keys)+'</style>',unsafe_allow_html=True)
 
 
 def fingerprint(profile):
@@ -99,11 +107,11 @@ def excel_download(profile, label, key):
 def comparison_figure(rows, references, metric, unit, primary_label="Draft", effective_date=None, primary_name=None):
     fig = go.Figure()
     fields = ("low", "high") if metric == "target" else ("value",)
-    series = [(profile["name"], profile["schedules"][metric], reference_color(metric_colors[metric], 1 if dash == "dot" else index), dash, False)
-              for index, (_, profile, _, dash) in enumerate(references)]
+    series = [(profile["name"], profile["schedules"][metric], reference_color(metric_colors[metric], 1 if dash == "dot" else index), dash, False, 'ref2' if source_label.startswith(('Reference 2','Profile 2')) else 'ref1')
+              for index, (source_label, profile, _, dash) in enumerate(references)]
     name = primary_name or st.session_state.get("draft", {}).get("name", primary_label)
-    series.append((name, rows, metric_colors[metric], "solid", True))
-    for index, (label, values, color, dash, primary) in enumerate(series):
+    series.append((name, rows, metric_colors[metric], "solid", True, "ref1" if page in ("View","Compare") else "current"))
+    for index, (label, values, color, dash, primary, source_role) in enumerate(series):
         xs = [minute(row["time"]) for row in values] + [1440]
         for field in fields:
             ys = [row[field] for row in values] + [values[-1][field]]
@@ -112,7 +120,7 @@ def comparison_figure(rows, references, metric, unit, primary_label="Draft", eff
             fig.add_trace(go.Scatter(x=xs, y=ys, name=label, mode="lines",
                 legendgroup=f"profile-{index}", showlegend=legend_entry,
                 line=dict(color=color, width=3 if primary else 2, dash=dash, shape="hv"),
-                customdata=[clock(x) for x in xs], meta=dict(label=label+suffix,unit=unit,kind="profile",legend_entry=legend_entry),
+                customdata=[clock(x) for x in xs], meta=dict(label=label+suffix,unit=unit,kind="profile",legend_entry=legend_entry,source_role=source_role),
                 hovertemplate="%{customdata}<br>%{y:.4g} "+unit+"<extra>%{fullData.name}</extra>"))
     effective = effective_date if primary_label != "Draft" else st.session_state.get("draft", {}).get("effective_date")
     date_text = "Effective: " + effective if effective else "Viewed: " + date.today().isoformat() + " · effective date not set"
@@ -126,6 +134,25 @@ def comparison_figure(rows, references, metric, unit, primary_label="Draft", eff
         yaxis=dict(title=unit, gridcolor=theme["grid"], rangemode="tozero" if metric == "basal" else "normal"), uirevision=metric)
     add_profile_guides(fig, schedule_changes(rows, fields), dark)
     return fig
+
+
+def expanded_profiles(profile, references, *, raw_schedules=None, custom=False):
+    figures={}
+    for metric in METRICS:
+        try:
+            rows=normalize_schedule((raw_schedules or profile['schedules'])[metric],metric)
+        except (ValueError, TypeError):
+            continue  # Never present a stale schedule when the draft has invalid edits.
+        compatible=[item for item in references if custom or metric in ('ic','basal') or
+                    item[1]['overview']['glucose_unit']==profile['overview']['glucose_unit']]
+        figures[metric]=comparison_figure(rows,compatible,metric,unit_for(metric,profile),
+            primary_label=profile['name'],effective_date=profile.get('effective_date'),primary_name=profile['name'])
+        if custom:
+            # Custom axes follow each source's units; regular comparisons still require matching units.
+            units=[unit_for(metric,item[1]) for item in compatible]+[unit_for(metric,profile)]
+            for trace in figures[metric].data:
+                trace.meta['unit']=units[int(trace.legendgroup.rsplit('-',1)[1])]
+    return figures
 
 
 profiles, load_errors = load_profiles(DATA)
@@ -146,7 +173,7 @@ for state_key in ('compare_second','second_reference_category','second_reference
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Nightscout-8.4")
+    st.caption("Build: Nightscout-13")
     st.caption("Create · compare · keep your history")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
@@ -169,6 +196,7 @@ with st.sidebar:
         reference_id = st.selectbox("Reference version", [p["id"] for p in candidates],
             format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="reference_id")
         reference = by_id[reference_id]
+        st.markdown(f'<span style="color:{source_colors["ref1"]};font-weight:600">Ref 1 · {escape(reference["name"])}</span>',unsafe_allow_html=True)
         linked_id = reference.get("linked_profile_id")
         if linked_id in by_id and linked_id != reference_id:
             st.caption("Corresponding profile: " + profile_label(by_id[linked_id]))
@@ -191,6 +219,7 @@ with st.sidebar:
             second_id = st.selectbox("Second reference version", [p["id"] for p in second_candidates],
                 format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="second_reference_id")
             second_reference = by_id[second_id]
+            st.markdown(f'<span style="color:{source_colors["ref2"]};font-weight:600">Ref 2 · {escape(second_reference["name"])}</span>',unsafe_allow_html=True)
         if page == "Editor":
             st.caption("Changing references keeps your draft intact. Copying starts a new draft from Reference 1.")
     else:
@@ -261,7 +290,7 @@ if page in ("View", "Compare"):
         details = {label: pd.Series({"Category": profile['category'], "Version":str(profile['version']), "Name":profile['name'],
             "Effective date":profile.get('effective_date') or 'Not set', "DIA (hours)":str(profile['overview']['dia_hours']),
             "Timezone":profile['overview']['timezone'], "Glucose unit":profile['overview']['glucose_unit'],
-            "Notes":profile.get('notes',''), **{k:str(v) for k,v in profile['overview'].get('extra',{}).items()}}) for label, profile in inspected}
+            "Notes":profile.get('notes',''), **display_settings(profile), **{k:str(v) for k,v in profile['overview'].get('extra',{}).items()}}) for label, profile in inspected}
         st.dataframe(pd.DataFrame(details).fillna('').rename_axis('Field').reset_index(),hide_index=True,width='stretch')
         st.download_button("Download selected profile JSON", json.dumps(reference,indent=2),f"profile-v{reference['version']}.json","application/json")
         excel_download(reference,"Download selected profile Excel","readonly_excel")
@@ -279,7 +308,9 @@ if page in ("View", "Compare"):
             if nightscout_view:
                 if tab.open:
                     view = graph_date_controls(nightscout_view, metric)
-                    figures, navigation = prepared_graphs(fig,view,reference['overview']['glucose_unit'],dark)
+                    figures, navigation = prepared_graphs(fig,view,reference['overview']['glucose_unit'],dark,
+                        profiles=expanded_profiles(reference,readonly_refs),metric=metric,
+                        custom_profiles=expanded_profiles(reference,readonly_refs,custom=True) if 'Custom graph' in view['layers'] else None)
                     render_graphs(figures,dark,navigation,cache=nightscout_view['loaded'])
             else:
                 st.plotly_chart(fig,width='stretch',key=f'readonly_plot_{metric}')
@@ -396,6 +427,21 @@ with tabs[0]:
             draft["effective_date"] = effective.isoformat() if effective else None
         draft["overview"]["timezone"] = st.text_input("Timezone", draft["overview"]["timezone"], key=f"tz_{epoch}")
         st.caption(f"Glucose unit: {draft['overview']['glucose_unit']} · I:C: g/U · Basal: U/h")
+        with st.expander("General AndroidAPS settings"):
+            st.caption("Optional historical settings for this profile version. Blank means not recorded. These values are saved only in Profile Studio; they do not configure AndroidAPS.")
+            settings=draft['overview'].get('aaps_settings',{})
+            columns=st.columns(2)
+            for index,(key,(label,setting_unit)) in enumerate(SETTINGS.items()):
+                widget_key=f'aaps_{epoch}_{key}'
+                st.session_state.setdefault(widget_key,float(settings[key]) if key in settings else None)
+                value=columns[index%2].number_input(label+' ('+setting_unit+')',min_value=0.0,
+                    value=None,step=1.0 if setting_unit in ('min','%') else .1,
+                    key=widget_key,placeholder='Not recorded')
+                if value is None:settings.pop(key,None)
+                else:settings[key]=value
+            if settings:draft['overview']['aaps_settings']=settings
+            else:draft['overview'].pop('aaps_settings',None)
+            st.caption("min_5m_carbimpact uses mg/dL per 5 minutes, including for mmol/L profiles. SMB frequency is the minimum interval between SMBs.")
         draft["notes"] = st.text_area("Notes / reason for changes", draft.get("notes",""), key=f"notes_{epoch}")
         link_options = [None] + [p["id"] for p in profiles if not editing or p["id"] != editing["id"]]
         current_link = draft.get("linked_profile_id")
@@ -419,7 +465,7 @@ with tabs[0]:
                 metadata[label] = pd.Series({"Name":profile["name"], "Category":profile["category"],
                     "Version":str(profile["version"]), "DIA (hours)":str(profile["overview"]["dia_hours"]),
                     "Timezone":profile["overview"]["timezone"], "Glucose unit":profile["overview"]["glucose_unit"],
-                    "Notes":profile.get("notes",""), **{k:str(v) for k,v in profile["overview"].get("extra",{}).items()}})
+                    "Notes":profile.get("notes",""), **display_settings(profile), **{k:str(v) for k,v in profile["overview"].get("extra",{}).items()}})
             st.dataframe(pd.DataFrame(metadata).fillna("").rename_axis("Field").reset_index(), hide_index=True, width="stretch")
         st.markdown("**Additional overview fields**")
         st.caption("Add text or numeric fields whenever you need them.")
@@ -518,7 +564,9 @@ for tab, metric in zip(tabs[1:], METRICS):
             if nightscout_view:
                 if tab.open:
                     graph_view = graph_date_controls(nightscout_view, metric)
-                    figures, navigation = prepared_graphs(fig,graph_view,draft["overview"]["glucose_unit"],dark)
+                    figures, navigation = prepared_graphs(fig,graph_view,draft["overview"]["glucose_unit"],dark,
+                        profiles=expanded_profiles(draft,references,raw_schedules=st.session_state.raw_schedules),metric=metric,
+                        custom_profiles=expanded_profiles(draft,references,raw_schedules=st.session_state.raw_schedules,custom=True) if 'Custom graph' in graph_view['layers'] else None)
                     render_graphs(figures,dark,navigation,cache=nightscout_view['loaded'])
             else:
                 st.plotly_chart(fig, width="stretch", key=f"plot_{metric}")

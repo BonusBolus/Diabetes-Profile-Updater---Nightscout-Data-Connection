@@ -113,7 +113,7 @@ class NightscoutTests(unittest.TestCase):
         profile = go.Figure(go.Scatter(x=[0,1440],y=[1,1],name='Draft',line_shape='hv'))
         profile.update_layout(yaxis_title='U/h',uirevision='basal')
         figures = graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',
-                             ['Glucose','Temporary basal','Boluses','Carbs','IOB','COB'],'mmol/L',True,overlay='Glucose')
+                             ['Glucose','Temporary basal','IOB + boluses','COB + carbs'],'mmol/L',True,overlay='Glucose')
         fig=figures[0]
         self.assertEqual(fig.data[0].name,'Draft')
         self.assertEqual(list(fig.data[0].y),[1,1])
@@ -168,8 +168,8 @@ class UpdatedChartTests(unittest.TestCase):
         loaded=sample_data(); days=[loaded['first']]
         profile=go.Figure(go.Scatter(x=[0,1440],y=[5,5],name='Draft'))
         profile.update_layout(yaxis_title='g/U',title='I:C · Viewed: 2026-09-17')
-        from nightscout_charts import LAYERS
-        for overlay in LAYERS:
+        from nightscout_charts import LAYERS, OVERLAYS
+        for overlay in OVERLAYS:
             figures=graph_figures(profile,loaded,days,'One day',list(LAYERS),'mmol/L',False,overlay=overlay)
             top=figures[0]
             self.assertEqual(top.layout.yaxis.title.text,'g/U')

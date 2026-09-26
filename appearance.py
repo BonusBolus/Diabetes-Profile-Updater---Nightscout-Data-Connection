@@ -12,6 +12,11 @@ def palette(dark):
             {"background": "#ffffff", "surface": "#f2f6f8", "text": "#24354b", "grid": "#dce4eb"})
 
 
+def reference_identity_colors(dark):
+    """Source identities, distinct from the four metric hues."""
+    return {'ref1':'#c4a4ff','ref2':'#ff9bc9'} if dark else {'ref1':'#7943c5','ref2':'#b83378'}
+
+
 def reference_color(color, index):
     """Two nearby shades of the metric hue; main profile keeps the base color."""
     destination, amount = ((255, .26) if index % 2 == 0 else (0, .20))

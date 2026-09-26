@@ -32,6 +32,21 @@ class EditorTests(unittest.TestCase):
     def button(self,label):
         return next(x for x in self.at.button if x.label==label)
 
+    def test_optional_aaps_settings_are_clean_until_edited_and_undoable(self):
+        self.assertTrue(self.button('Undo').disabled)
+        self.assertNotIn('aaps_settings',self.at.session_state.draft['overview'])
+        field=next(x for x in self.at.number_input if x.label=='SMB frequency (min)')
+        self.assertIsNone(field.value)
+        field.set_value(4.0).run();self.clean()
+        self.assertEqual(self.at.session_state.draft['overview']['aaps_settings']['smbinterval'],4)
+        self.button('Undo').click().run();self.clean()
+        self.assertNotIn('aaps_settings',self.at.session_state.draft['overview'])
+        self.button('Redo').click().run();self.clean()
+        self.assertEqual(self.at.session_state.draft['overview']['aaps_settings']['smbinterval'],4)
+        field=next(x for x in self.at.number_input if x.label=='SMB frequency (min)')
+        field.set_value(None).run();self.clean()
+        self.assertNotIn('aaps_settings',self.at.session_state.draft['overview'])
+
     def test_readonly_modes_preserve_draft_and_show_saved_only(self):
         self.add_reference('Drinking', .9)
         at=self.at;at.run()
@@ -416,6 +431,8 @@ class EditorTests(unittest.TestCase):
             at.selectbox(key='reference_category').select('Other units').run(); self.clean()
         figures = self.figures(draw.call_args_list)
         self.assertEqual(len(figures['plot_isf'].data),2)
+        self.assertEqual(figures['plot_isf'].data[0].meta['source_role'],'ref2')
+        self.assertTrue(any('Ref 2 ·' in item.value and '#ff9bc9' in item.value or 'Ref 2 ·' in item.value and '#b83378' in item.value for item in at.markdown))
         self.assertEqual(figures['plot_isf'].data[0].name,next(p['name'] for p in load_profiles(self.folder.name)[0] if p['id']==at.session_state.second_reference_id))
 
     def test_nightscout_load_is_manual_and_never_changes_profile(self):
@@ -445,34 +462,24 @@ class EditorTests(unittest.TestCase):
             at.radio(key='ns_mode').set_value('Median + band').run(); self.clean()
             with patch('graph_view.render_graphs') as draw:
                 at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-                at.button_group(key='ns_layers').set_value(['Glucose','Temporary basal','Boluses','Carbs','IOB','COB']).run()
+                at.button_group(key='ns_layers').set_value(['Glucose','Temporary basal','IOB + boluses','COB + carbs','Custom graph']).run()
                 self.clean()
             fig = draw.call_args_list[0].args[0][1]
             self.assertTrue(any(t.name=='Median glucose' for t in fig.data))
             self.assertEqual(at.session_state.draft,before)
             at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-            at.button_group(key='ns_overlay_ic').set_value('Glucose').run(); self.clean()
+            self.assertFalse(any(getattr(x,'key',None)=='ns_overlay_ic' for x in at.button_group))
+            self.assertFalse(any(getattr(x,'key',None)=='ns_same_scale_ic' for x in at.toggle))
+            at.radio(key='ns_mode').set_value('One day').run(); self.clean()
             with patch('graph_view.render_graphs') as draw:
-                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-                at.button(key='ns_next_ic').click().run(); self.clean()
-            self.assertEqual(at.session_state.ns_mode,'One day')
+                at.session_state.editor_tab='I:C'
+                at.button(key='ns_calendar_'+str(loaded['first'])).click().run(); self.clean()
             self.assertEqual(at.session_state.ns_day,loaded['first'])
-            top=draw.call_args_list[0].args[0][0]
-            self.assertEqual(top.layout.yaxis2.side,'right')
-            self.assertTrue(any(t.yaxis=='y2' for t in top.data))
-            self.assertIn(str(loaded['first']),top.layout.title.text)
-            self.assertEqual(at.session_state.ns_overlay,'Glucose')
-            with patch('graph_view.render_graphs') as draw:
-                at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-                at.toggle(key='ns_same_scale_ic').set_value(True).run(); self.clean()
-            top=draw.call_args_list[0].args[0][0]
-            self.assertEqual(list(top.layout.yaxis.range),list(top.layout.yaxis2.range))
-            self.assertTrue(at.session_state.ns_same_scale)
-            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-            at.button(key='ns_previous_ic').click().run(); self.clean()
-            self.assertEqual(at.session_state.ns_day,loaded['last'])
+            navigation=draw.call_args_list[0].args[2]
+            self.assertIn('Glucose',navigation['overlays'])
+            self.assertFalse(navigation['same_scale'])
             self.assertEqual(at.session_state.draft,before)
-            at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
+            at.session_state.editor_tab='I:C'
             self.button('Save as new version').click().run(); self.clean()
             fetch.assert_called_once()
             for p in Path(self.folder.name).glob('*.json'):

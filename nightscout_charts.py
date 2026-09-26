@@ -13,13 +13,62 @@ from chart_cache import cached
 from nightscout_stats import continuous_summary, hourly_events
 from nightscout import UTC, glucose_summary, local_points
 
-LAYERS = {"Glucose": "glucose", "Temporary basal": "basal", "Boluses": "bolus",
-          "Carbs": "carbs", "IOB": "iob", "COB": "cob", "Nightscout targets": "target"}
-OVERLAY_CHOICES = ["None", "Glucose", "Temporary basal", "IOB + boluses", "COB + carbs", "Nightscout targets"]
-OVERLAYS = {**{label: [key] for label, key in LAYERS.items()},
-            "IOB + boluses": ["iob", "bolus"], "COB + carbs": ["cob", "carbs"]}
+LAYERS = {"Glucose": "glucose", "Temporary basal": "basal",
+          "IOB + boluses": "iob_bolus", "COB + carbs": "cob_carbs",
+          "Nightscout targets": "target", "Variable sensitivity": "variable_sens",
+          "Custom graph": "custom"}
+OVERLAY_CHOICES = ["None", "Glucose", "Temporary basal", "IOB + boluses", "COB + carbs", "Nightscout targets", "Variable sensitivity"]
+OVERLAYS = {"Glucose":["glucose"], "Temporary basal":["basal"],
+            "IOB + boluses":["iob","bolus"], "COB + carbs":["cob","carbs"],
+            "Nightscout targets":["target"], "Variable sensitivity":["variable_sens"]}
 COLORS = {"glucose": "#32cd32", "basal": "#00cfe8", "basal_percent": "#00cfe8",
-          "iob": "#2196f3", "bolus": "#42baf5", "carbs": "#ff9800", "cob": "#ff9800", "target": "#64d86a"}
+          "iob": "#2196f3", "bolus": "#42baf5", "carbs": "#ff9800", "cob": "#ff9800", "target": "#64d86a", "variable_sens":"#eeeeee"}
+TELEMETRY_LABELS = {'variable_sens':'Variable sensitivity'}
+GLUCOSE_UNITS = ('glucose', 'variable_sens')
+GROUP_KEYS = {'iob_bolus':['iob','bolus'], 'cob_carbs':['cob','carbs']}
+
+
+def telemetry_unit(key, unit):
+    return unit + '/U' if key == 'variable_sens' else unit
+
+
+def split_iob(traces, dark):
+    """Split at interpolated zero crossings, retaining gaps and hover metadata."""
+    result = []
+    for trace in traces:
+        meta = trace.meta or {}
+        if meta.get('kind') != 'iob' and not (meta.get('kind') == 'median' and meta.get('dataset') == 'iob'):
+            result.append(trace)
+            continue
+        if not any(y is not None and pd.notna(y) and y < 0 for y in trace.y):
+            result.append(trace)
+            continue
+        points = []
+        previous = None
+        details = list(trace.customdata) if trace.customdata is not None else [''] * len(trace.x)
+        for x, y, detail in zip(trace.x, trace.y, details):
+            if x is None or y is None or pd.isna(y):
+                points.append((None, None, '')); previous = None
+                continue
+            if previous and previous[1] * y < 0:
+                cross = previous[0] + (x-previous[0]) * (-previous[1]) / (y-previous[1])
+                points.append((cross, 0, detail))
+            points.append((x,y,detail)); previous=(x,y)
+        for negative in (False, True):
+            copy=go.Scatter(trace)
+            copy.x=[x for x,y,d in points]
+            copy.y=[y if y is not None and (y <= 0 if negative else y >= 0) else None for x,y,d in points]
+            if not any(y is not None for y in copy.y):
+                continue
+            copy.customdata=[d for x,y,d in points]
+            if negative:
+                color='#af91e8' if dark else '#7650ad'
+                copy.line.color=color; copy.fillcolor=rgba(color,.28)
+                copy.name='Negative IOB'; copy.legendgroup='Negative IOB'
+                copy.meta=dict(meta,label='Median negative IOB' if meta.get('kind')=='median' else 'Negative IOB')
+            result.append(copy)
+    return result
+
 TARGET_COLORS = {"Eating Soon":"#ff9800", "Activity":"#59cddd", "Hypo":"#f44336", "Custom":"#64d86a"}
 
 
@@ -69,7 +118,7 @@ def interval_points(frame, zone, day):
         previous = None
         for at in times:
             local = at.astimezone(tz)
-            minute = 1440 if at == end else local.hour*60 + local.minute + local.second/60
+            minute = 1440 if at == end else local.hour*60 + local.minute + local.second/60 + local.microsecond/60000000
             if previous and (minute < previous[0] or
                              abs((minute-previous[0]) - (at-previous[1]).total_seconds()/60) > .01):
                 xs.append(None); ys.append(None); labels.append("")
@@ -146,38 +195,47 @@ def temporary_target_traces(frame, zone, day, unit, dark):
 
 def dataset_traces(key, loaded, days, mode, unit, dark):
     cache_key=(key,tuple(days),mode,unit,dark)
-    return cached(loaded,'traces',cache_key,lambda: _dataset_traces(key,loaded,days,mode,unit,dark),limit=48)
+    return cached(loaded,'traces',cache_key,lambda: display_traces(key,loaded,days,mode,unit,dark),limit=48)
+
+
+def display_traces(key, loaded, days, mode, unit, dark):
+    traces=_dataset_traces(key,loaded,days,mode,unit,dark)
+    if key=='iob':return split_iob(traces,dark)
+    return traces
+
+
+def dataset_color(key,dark):
+    if dark:return COLORS[key]
+    return {"glucose":"#218c24", "basal":"#0089a4", "basal_percent":"#0089a4",
+                 "iob":"#177cb8", "bolus":"#177cb8", "carbs":"#bf7100", "cob":"#bf7100", "target":"#24843b", "variable_sens":"#4b5563"}[key]
 
 
 def _dataset_traces(key, loaded, days, mode, unit, dark):
     data, zone = loaded['data'], loaded['zone']
     frame = data.get(key, pd.DataFrame())
-    color = COLORS[key]
-    if not dark:
-        color = {"glucose":"#218c24", "basal":"#0089a4", "basal_percent":"#0089a4",
-                 "iob":"#177cb8", "bolus":"#177cb8", "carbs":"#bf7100", "cob":"#bf7100", "target":"#24843b"}[key]
+    color = dataset_color(key,dark)
     if key == 'target' and not frame.empty:
         frame = frame[frame['source'] == 'Temporary target']
     if frame.empty:
         return []
     if mode == 'Median + band' and key in ('carbs','bolus'):
         return []  # Event amounts belong in the hourly summaries, not a pile of markers.
-    if mode == 'Median + band' and key in ('glucose','iob','cob','basal','basal_percent'):
+    if mode == 'Median + band' and key in ('glucose','iob','cob','basal','basal_percent',*TELEMETRY_LABELS):
         stats=cached(loaded,'summaries',(key,tuple(days),unit),lambda: continuous_summary(loaded,key,days,unit))
         if stats.empty:return []
-        label={'glucose':'Glucose','iob':'IOB','cob':'COB','basal':'Temp basal','basal_percent':'Temp basal %'}[key]
-        sample_unit={'glucose':unit,'iob':'U','cob':'g','basal':'U/h','basal_percent':'% field'}[key]
+        label={'glucose':'Glucose','iob':'IOB','cob':'COB','basal':'Temp basal','basal_percent':'Temp basal %',**TELEMETRY_LABELS}[key]
+        sample_unit={'glucose':unit,'iob':'U','cob':'g','basal':'U/h','basal_percent':'% field',**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}}[key]
         return [
-            go.Scatter(x=stats.minute.tolist(), y=stats.low.tolist(), mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'),
+            go.Scatter(x=stats.minute.tolist(), y=stats.low.tolist(), mode='lines', line=dict(width=0), meta=dict(kind='spread',dataset=key), showlegend=False, hoverinfo='skip'),
             go.Scatter(x=stats.minute.tolist(), y=stats.high.tolist(), mode='lines', line=dict(width=0), fill='tonexty',
-                       fillcolor=rgba(color,.18), name=label+' 25–75%', hoverinfo='skip'),
+                       fillcolor=rgba(color,.18), name=label+' 25–75%', meta=dict(kind='spread',dataset=key), hoverinfo='skip'),
             go.Scatter(x=stats.minute.tolist(), y=stats['median'].tolist(), mode='lines', name='Median '+label.lower() if key=='glucose' else 'Median '+label,
                        line=dict(color=color,width=2.5,shape='hv' if key in ('basal','basal_percent','cob') else 'linear',dash='solid'),
-                       fill='tozeroy' if key!='glucose' else None,fillcolor=rgba(color,.12),
+                       fill='tozeroy' if key in ('iob','cob','basal','basal_percent') else None,fillcolor=rgba(color,.12),
                        customdata=stats['days'].tolist(), meta=dict(label='Median '+label,unit=sample_unit,kind='median',dataset=key), connectgaps=False,
                        hovertemplate='%{y:.3g} '+sample_unit+'<br>%{customdata:.0f} contributing days<extra>Median</extra>')]
     traces = []
-    sample_unit = {'glucose':unit,'basal':'U/h','basal_percent':'% field','bolus':'U','iob':'U','carbs':'g','cob':'g','target':unit}[key]
+    sample_unit = {'glucose':unit,'basal':'U/h','basal_percent':'% field','bolus':'U','iob':'U','carbs':'g','cob':'g','target':unit,**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}}[key]
     point_days = {}
     if key not in ("target","basal","basal_percent"):
         points = local_points(frame,zone,days)
@@ -185,7 +243,7 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
     for index, day in enumerate(days):
         dash = DASHES[index % len(DASHES)]
         name = {'glucose':'Glucose','basal':'Temp basal','basal_percent':'Temp basal %',
-                'bolus':'Bolus','iob':'IOB','carbs':'Carbs','cob':'COB','target':'Nightscout target'}[key]
+                'bolus':'Bolus','iob':'IOB','carbs':'Carbs','cob':'COB','target':'Nightscout target',**TELEMETRY_LABELS}[key]
         if key == 'target':
             traces.extend(temporary_target_traces(frame,zone,day,unit,dark))
             continue
@@ -201,12 +259,12 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
                 previous = None
                 for item in part.to_dict('records'):
                     at, minute = item['time'], item['minute']
-                    if previous and key in ('glucose','iob','cob') and (
+                    if previous and key in ('glucose','iob','cob',*TELEMETRY_LABELS) and (
                         (at-previous[0]).total_seconds()>900 or minute<previous[1] or
                         abs(minute-previous[1]-(at-previous[0]).total_seconds()/60)>.01):
                         xs.append(None); ys.append(None); labels.append('')
                     xs.append(minute)
-                    ys.append(item['value']/18 if key=='glucose' and unit=='mmol/L' else item['value'])
+                    ys.append(item['value']/18 if key in GLUCOSE_UNITS and unit=='mmol/L' else item['value'])
                     labels.append(at.strftime('%Y-%m-%d %H:%M %z')+' · '+escape(item['label']))
                     previous=at,minute
                 groups.append((group,xs,ys,labels))
@@ -296,7 +354,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         if key=='glucose' and show_targets:
             for trace in dataset_traces('target',loaded,days,mode,unit,dark):
                 top.add_trace(trace,secondary_y=True)
-        overlay_unit={'glucose':unit,'target':unit,'basal':'U/h','iob':'U','bolus':'U','carbs':'g','cob':'g'}[key]
+        overlay_unit={'glucose':unit,'target':unit,'basal':'U/h','iob':'U','bolus':'U','carbs':'g','cob':'g',**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}}[key]
         top.update_yaxes(title_text=overlay_unit,secondary_y=True,showgrid=False)
         if key=='glucose':
             glucose_axis(top,loaded,days,unit,secondary=True)
@@ -326,7 +384,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         add_profile_guides(top,changes,dark)
         compact_legend(top)
         return [top]
-    selected={LAYERS[label] for label in layers}
+    selected={key for label in layers for key in GROUP_KEYS.get(LAYERS[label], [LAYERS[label]])}
     groups=[(['glucose'],'Glucose',unit),(['basal'],'Temp basal','U/h'),
             (['iob','bolus'],'IOB & boluses','U'),(['cob','carbs'],'COB & carbs','g'),
             (['target'],'Temp targets',unit)]
@@ -359,8 +417,21 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         if not has_records:
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
         figures.append(fig)
+    if 'variable_sens' in selected:
+        fig=go.Figure(dataset_traces('variable_sens',loaded,days,mode,unit,dark))
+        style_figure(fig,f'Variable sensitivity · {dates}',unit+'/U',loaded['zone'],dark)
+        fig.update_layout(meta=dict(fig.layout.meta or {},dataset='variable_sens'))
+        fig.update_yaxes(rangemode='normal')
+        if not any(any(pd.notna(y) for y in t.y) for t in fig.data):
+            fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
+        figures.append(fig)
+    if 'custom' in selected:
+        fig=go.Figure()
+        style_figure(fig,f'Custom graph · {dates}','',loaded['zone'],dark,height=390)
+        fig.update_layout(meta=dict(fig.layout.meta or {},kind='custom'))
+        figures.append(fig)
     if summary_layout:
-        figures.extend(hourly_figure(loaded,key,days,dark) for key in ("bolus","carbs"))
+        figures.extend(hourly_figure(loaded,key,days,dark) for key in ('bolus','carbs') if key in selected)
     for figure in figures:
         event_label_headroom(figure)
         add_profile_guides(figure,changes,dark)
@@ -382,9 +453,9 @@ def hourly_figure(loaded, key, days, dark, exclude_smb=False):
         colorbar=dict(title=dict(text=unit),len=.6,y=.7,thickness=10),
         name=label+' hourly',meta=dict(kind='hourly_heatmap',label=label,unit=unit,dataset=key),
         hovertemplate='%{customdata[0]} · %{customdata[1]}<br>%{z:.3g} '+unit+' · %{customdata[3]} events<extra></extra>'),row=1,col=1)
-    fig.add_trace(go.Bar(x=[30+60*h for h in range(24)],y=stats['median'],width=55,marker_color=color,
-        customdata=stats['contributing'],name='Median hourly '+label.lower(),showlegend=False,
-        meta=dict(kind='hourly_histogram',label='Median hourly '+label.lower(),unit=unit,dataset=key),
+    fig.add_trace(go.Bar(x=[30+60*h for h in range(24)],y=stats['average'],width=55,marker_color=color,
+        customdata=stats['contributing'],name='Average hourly '+label.lower(),showlegend=False,
+        meta=dict(kind='hourly_histogram',label='Average hourly '+label.lower(),unit=unit,dataset=key),
         hovertemplate='%{y:.3g} '+unit+'<br>%{customdata} complete days<extra></extra>'),row=2,col=1)
     height=min(680,max(410,310+len(days)*16))
     style_figure(fig,f'{label} hourly · {date_label(days)}','Date',loaded['zone'],dark,height=height)
@@ -392,7 +463,7 @@ def hourly_figure(loaded, key, days, dark, exclude_smb=False):
     fig.update_xaxes(range=[0,1440],tickvals=list(range(0,1441,240)),ticktext=[f'{x//60:02}:00' for x in range(0,1441,240)])
     fig.update_xaxes(matches='x',row=2,col=1)
     fig.update_yaxes(type='category',autorange='reversed',title_text='Date',tickfont_size=11,row=1,col=1)
-    fig.update_yaxes(title_text='Median '+unit,rangemode='tozero',row=2,col=1)
+    fig.update_yaxes(title_text='Average '+unit,rangemode='tozero',row=2,col=1)
     fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key,exclude_smb=exclude_smb)
     if all(v is None for row in stats['values'] for v in row):
         fig.add_annotation(text='No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)

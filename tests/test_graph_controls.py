@@ -20,7 +20,7 @@ class GraphControlTests(unittest.TestCase):
         for overlay in ['COB + carbs','IOB + boluses']:
             for matched in (False,True):
                 figures=graph_figures(profile,loaded,[loaded['first']],'One day',
-                    ['Carbs','Boluses','IOB','COB'],'mmol/L',True,overlay=overlay,same_scale=matched)
+                    ['COB + carbs','IOB + boluses'],'mmol/L',True,overlay=overlay,same_scale=matched)
                 for fig in figures:
                     for trace in fig.data:
                         if trace.mode and 'text' in trace.mode:
@@ -63,7 +63,7 @@ class GraphControlTests(unittest.TestCase):
         add_profile_guides(profile,changes,True)
         for times in (changes,[420]):
             profile.layout.meta={'profile_changes':times}
-            figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',['Glucose','IOB','COB','Temporary basal'],'mmol/L',True)
+            figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',['Glucose','IOB + boluses','COB + carbs','Temporary basal'],'mmol/L',True)
             for fig in figs:
                 self.assertEqual([s.x0 for s in fig.layout.shapes if s.name=='Profile change'],times)
 
@@ -93,11 +93,8 @@ if view:
         self.assertEqual(at.session_state.ns_days,[])
         at.button(key='ns_all_days').click().run()
         self.assertEqual(len(at.session_state.ns_days),4)
-        at.button_group(key='ns_layers').set_value(['Glucose','IOB']).run()
-        at.button_group(key='ns_overlay_ic').set_value('IOB + boluses').run()
-        self.assertFalse(at.exception)
-        self.assertEqual(at.session_state.ns_overlay,'IOB + boluses')
-        at.button(key='ns_next_ic').click().run()
-        self.assertEqual(at.session_state.ns_mode,'One day')
-        self.assertEqual(at.session_state.ns_day,date(2026,8,30))
+        at.button_group(key='ns_layers').set_value(['Glucose','IOB + boluses']).run()
+        self.assertFalse(any(getattr(x,'key',None)=='ns_overlay_ic' for x in at.button_group))
+        self.assertFalse(any(getattr(x,'key',None)=='ns_same_scale_ic' for x in at.toggle))
+        self.assertFalse(any(getattr(x,'key',None)=='ns_next_ic' for x in at.button))
         self.assertFalse(at.exception)

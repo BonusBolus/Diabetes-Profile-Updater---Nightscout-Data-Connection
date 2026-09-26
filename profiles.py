@@ -12,6 +12,7 @@ import os
 import tempfile
 from uuid import uuid4
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+from aaps_settings import SETTINGS, SHEET, validate_settings, write_settings, read_settings
 
 METRICS = {"ic": "I:C", "isf": "ISF", "basal": "Basal", "target": "Target"}
 
@@ -91,6 +92,9 @@ def validate_profile(profile):
     if not isinstance(overview, dict):
         raise ValueError("Overview is missing.")
     overview["dia_hours"] = number(overview.get("dia_hours"), "DIA")
+    if 'aaps_settings' in overview:
+        overview['aaps_settings'] = validate_settings(overview['aaps_settings'])
+        if not overview['aaps_settings']:overview.pop('aaps_settings')
     if overview.get("glucose_unit") not in ("mmol/L", "mg/dL"):
         raise ValueError("Glucose unit must be mmol/L or mg/dL.")
     try:
@@ -199,6 +203,9 @@ def profile_changes(before, after):
     for key, label in (("dia_hours", "DIA (hours)"), ("timezone", "Timezone"), ("glucose_unit", "Glucose unit")):
         changed(label, before["overview"][key], after["overview"][key])
     old_extra, new_extra = before["overview"].get("extra", {}), after["overview"].get("extra", {})
+    for key, (label, unit) in SETTINGS.items():
+        changed(label + ' (' + unit + ')', before['overview'].get('aaps_settings', {}).get(key),
+                after['overview'].get('aaps_settings', {}).get(key))
     for key in sorted(old_extra.keys() | new_extra.keys()):
         changed("Overview · " + key, old_extra.get(key), new_extra.get(key))
     for metric, label in METRICS.items():
@@ -286,7 +293,7 @@ def excel_sheets(content):
     from openpyxl import load_workbook
     book = load_workbook(BytesIO(content), read_only=True, data_only=True)
     try:
-        return book.sheetnames
+        return [name for name in book.sheetnames if name != SHEET]
     finally:
         book.close()
 
@@ -336,6 +343,7 @@ def export_excel(profile, template):
                     cell.number_format = "0.######"
                 ws.row_dimensions[row].height = ws.row_dimensions[13].height
         book.calculation = CalcProperties(calcMode="auto", fullCalcOnLoad=True)
+        write_settings(book, p, ws.title)
         output = BytesIO()
         book.save(output)
         return output.getvalue()
@@ -419,7 +427,7 @@ def import_excel(content, sheet, category=None):
             raise ValueError("Glucose unit must be mmol, mmol/L or mg/dL.")
         return validate_profile({"schema_version":1, "name":name,
             "category":profile_category, "parent_id":None, "effective_date":effective, "notes":notes,
-            "overview":{"dia_hours":dia, "glucose_unit":unit, "timezone":zone, "extra":{}},
+            "overview":{"dia_hours":dia, "glucose_unit":unit, "timezone":zone, "extra":{}, **({"aaps_settings":read_settings(book, sheet)} if SHEET in book.sheetnames else {})},
             "schedules":schedules, "source":{"format":"xlsx", "sheet":sheet, "layout":layout}})
     finally:
         book.close()

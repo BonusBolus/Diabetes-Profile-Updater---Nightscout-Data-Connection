@@ -1,5 +1,107 @@
 # Profile Studio
 
+## Nightscout-13: setting/source colors and compact custom axes
+
+Replace the app files, restart and check **Build: Nightscout-13**. Keep your `data/` and `examples/` folders. No new dependency is needed.
+
+- Custom profile selectors highlight I:C orange, ISF yellow, basal blue and target range green. Each button separates the setting color from the profile-name color and includes a Ref 1 / Ref 2 / Current label.
+- Ref 1 is purple and Ref 2 pink, with darker variants in light mode. The sidebar selections and identity labels use the same colors as profile names in custom selectors and legends. The identity follows the reference slot, including compare-only mode and references filtered from regular comparisons due to differing units. Profile lines keep their setting colors and reference tints.
+- Custom axes use compact 54-pixel lanes alternating left/right, with smaller tick labels and shorter numeric formatting. This replaces large proportional gaps on the right and preserves more plot width on wide screens. Margins grow only for the number of unit axes present and shrink when fields are removed.
+- Axis lines, ticks and titles follow the first selected dataset for that unit. Multiple datasets sharing a unit still share one axis, so a single axis cannot show all their colors. Different temporary-target reasons and negative IOB retain their individual trace colors.
+- Date navigation, fullscreen and the independent custom same-scale toggle retain their existing behavior.
+
+## Nightscout-12: grouped layers and Custom graph
+
+Replace the app files, including **custom_graph.py** and **custom_graph.js**, restart and check **Build: Nightscout-12**. Keep your `data/` and `examples/` folders. No new dependency is needed.
+
+- **IOB + boluses** and **COB + carbs** are single data-layer toggles. In Median mode, each toggle controls its median timeline and corresponding hourly grid/histogram. The separate IOB + COB layer is removed.
+- Select **Custom graph** in Data layers, then open **Choose custom data** above that graph. Choose any combination of glucose, absolute or percentage temp basal, IOB, boluses, COB, carbs, temp targets and VSENS.
+- I:C, ISF, basal and target schedules from the current profile/draft and selected references are individual options. Low/high target bounds stay together. Reference tints are preserved. Each source keeps its units, including references with different glucose units. General scalar settings such as DIA are not graph fields.
+- One axis per distinct unit; the first selected unit uses the left axis and further units use labeled right axes. More axes use more horizontal space. For one/two selected fields, **Same axis scale** can match two different unit axes numerically. A shared unit already uses the same scale. The toggle is hidden above two fields and resets when fields change.
+- Median mode uses median continuous curves with their existing variability bands, and **average hourly totals** for carb/bolus bars. Complete zero-event hours count, missing/partial hours are excluded. Selecting a specific day returns to its individual events.
+- Custom controls work in expanded view, preserving zoom and local date navigation without a server rerun. They are independent of the pinned graph's overlay and axis controls. A Streamlit rerun/reload resets custom selection to glucose; it does not save graph choices into a profile.
+- Dates, glucose 4–10 band, target-reason colors, signed IOB, event markers and profile-change guides remain. Profile schedules show the current draft/reference, not the historical active profile. Custom graph temp-target shading continues to use Nightscout's historical baseline.
+
+Historical fields still absent: **DEV, −BGI and SENS%**, removed in Nightscout-11 at the user's request. This update does not restore those approximate telemetry sources or add an AAPS log importer. All other previously available underlying recorded datasets remain selectable.
+
+## Nightscout-11: keep VSENS, remove approximate telemetry
+
+Replace the app code, restart and check **Build: Nightscout-11**. Keep your `data/` and `examples/` folders, then click **Load / refresh data**. No new dependency is required.
+
+- Removed DEV, −BGI and SENS% from data loading, graph layers and profile overlays.
+- Removed the extra AndroidAPS source-unit selector used for Dev/BGI reason text. Your profile glucose-unit setting remains.
+- **Variable sensitivity (VSENS)** stays available as a graph layer and profile overlay, including expanded view. It uses uploaded `openaps.suggested.variable_sens`, converted from mg/dL/U when the profile uses mmol/L.
+- The combined panel is now **IOB + COB**, with U and g axes. Existing layer selections are filtered to the supported choices.
+
+Identical AAPS Autosens, raw deviation and insulin-impact curves would require the original internal calculated graph data through a suitable export or custom upload. The standard Nightscout fields previously used here cannot guarantee an identical reconstruction. No such export or uploader is implemented.
+
+The notes below describe earlier releases. The DEV/BGI/SENS features and source-unit selector documented for Nightscout-9/10 are superseded by this removal.
+
+## Nightscout-10: unified controls, SENS scale and timestamp fix
+
+Replace the app code, restart and check **Build: Nightscout-10**. Keep your `data/` and `examples/` folders. No new dependency is required.
+
+- Overlay selection, matching axes, previous/next day and the date calendar now live in a single graph toolbar. The same controls remain in expanded view. Axis limits are recomputed for the selected overlay and profile, so a stale external selector cannot change the wrong axes. Matching is numeric only; it does not convert different quantities into equivalent units.
+- **SENS%** is available as its own layer as well as in the IOB/COB/SENS panel and profile overlay. Its percentage axis stays centered on 100%, normally 80–120%, expanding symmetrically in 10-point steps (for example 70–130%). A dotted 100% baseline helps interpretation. Matching both profile and SENS axes may require a wider common range.
+- Each recorded panel has **↑ / ↓** controls to change its position; the profile remains pinned. Order survives local day, overlay, scale and profile-setting changes, including fullscreen. A Streamlit rerun or reload starts a new viewer with the default order.
+- The **hourly bolus and carb bars default to Average**; the toggle still offers Median. Both use each selected day's complete hourly total, including complete zero-event hours and excluding partial/unavailable hours. IOB/COB timelines and heatmap cells are unchanged.
+- Fractional seconds are now retained when converting UTC timestamps to local minute coordinates. Previously, losing fractions could falsely trigger the daylight-saving discontinuity check, breaking several curves at once. Genuine gaps over 15 minutes, actual DST clock jumps and empty median bins remain visible. No readings are interpolated or invented.
+- Reported **Dev** is now shown as neutral blue bars and **−BGI** as a line on a shared axis symmetric around zero. Units still follow the profile's glucose unit. The optional variable-sensitivity overlay remains on its own right axis.
+
+### What SENS% actually represents here
+
+The source remains `openaps.suggested.sensitivityRatio × 100`. A ratio of 1 is 100%. In the standard Autosens adjustment branch, a higher ratio increases basal and divides the profile ISF by that ratio; it generally represents compensation for resistance, not a higher numerical ISF. However, the uploaded loop ratio can instead incorporate a temporary-target or TDD adjustment.
+
+AAPS's on-device SENS graph reads `autosensData.autosensResult.ratio`. That internal curve is not identical to the uploaded loop ratio in all cases. The app therefore labels the uploaded series **SENS% (loop ratio)** and explains the distinction beneath the graph. It does not claim to reconstruct missing Autosens state.
+
+### Why the Dev graph cannot exactly reproduce AAPS yet
+
+The app reads `Dev:` and `BGI:` from `openaps.suggested.reason`, interpreting them in the AndroidAPS source units selected in the connection form. In AAPS's SMB calculation, the reported Dev is approximately `6 × (selected glucose trend − 5-minute BGI)`, projected over 30 minutes, rounded and then formatted in the phone's units. For negative results it may select a longer averaged glucose trend.
+
+Dividing that number by six rescales the projection without itself discarding more information, but cannot recover the original five-minute deviation, undo rounding, or supply a meal/UAM classification. The on-device graph uses raw Autosens deviation and an insulin-impact calculation based on the sensitivity used for absorption; it can differ from the loop reason for more than the factor of six. This release preserves the original reported Dev and labels its 30-minute basis, alongside the sign-reversed five-minute BGI. Comparing their heights as though they had the same time basis would be misleading. The AAPS graph code also plots these internal mg/dL-based values directly, whereas Profile Studio converts to the glucose unit shown on its axis; that is another reason the axis numbers can differ from the screenshot.
+
+AAPS's documented classification is grey for carbs, green/red for positive/negative deviations used by Autosens, yellow for UAM, and black for small deviations excluded from sensitivity calculations. Black is not an unknown-data category. Its implementation uses internal `type` and `pastSensitivity` values. Those flags and raw deviations are not standard fields of the uploaded suggested result. The current bars therefore use a separate neutral blue and explicitly say classification is unavailable; no colors are guessed from COB or the sign of Dev. An export containing raw Autosens state would be needed for faithful classified bars.
+
+Verified against:
+- [AAPS graph documentation](https://androidaps.readthedocs.io/en/latest/DailyLifeWithAaps/AapsScreens.html)
+- [Graph preparation: Autosens ratio, raw deviation, colors and −BGI](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/workflow/src/main/kotlin/app/aaps/workflow/PrepareIobAutosensGraphDataWorker.kt)
+- [SMB projected Dev and BGI](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSSMB/DetermineBasalSMB.kt)
+
+
+## Nightscout-9: sensitivity layers and expanded controls
+
+Update your existing installation with the files in this ZIP (including **aaps_settings.py**), restart Streamlit, and check **Build: Nightscout-9**. Keep your existing `data/` and `examples/` folders. Click **Load / refresh data** once to load the new telemetry fields.
+
+- Negative IOB is lavender, positive IOB remains blue. Lines split at zero crossings without joining missing intervals. This also applies to the median line; its 25–75% band retains the existing blue styling.
+- The graph toolbar now switches **I:C / ISF / Basal / Target** locally, including expanded view. It preserves the displayed dates, zoom and graph toggles, updates the corresponding references, and moves all profile-change guides. Invalid draft schedules are omitted from these buttons until corrected.
+- **Temp targets: on/off** appears directly above the glucose panel and beside the profile graph when its glucose overlay is selected. Both buttons control the same view; standalone temporary-target panels are unaffected.
+- New data layers: **IOB + COB + SENS%** (separate U, g and % axes), **Deviation + BGI**, and **Variable sensitivity**. The Dev/BGI panel has its own variable-sensitivity overlay button using a separate right axis. Variable sensitivity and SENS% are also available as profile overlays.
+- The hourly bolus and carb bar plots each have a **Bars: Median / Average** toggle, including expanded view. Average is the arithmetic mean of each selected day’s total for that hour. Both statistics include complete zero-event hours and exclude partial or unavailable hours, using the same SMB filter as the grid. Heatmap cells and IOB/COB curves are unchanged. Day navigation shows the selected day’s totals and disables this aggregate toggle.
+- Each new continuous series uses the same per-day, five-minute median and 25–75% band in Median mode. Missing observations stay blank. Dates and controls stay local after loading; graph navigation makes no Nightscout requests.
+
+### Sources and units
+
+`openaps.suggested.sensitivityRatio × 100` supplies **SENS% (reported ratio)**. This field can reflect Autosens, a TDD-based ratio or temporary-target adjustments; it must not always be interpreted as pure Autosens. `openaps.suggested.variable_sens` supplies variable sensitivity in mg/dL/U, converted for mmol/L profiles. Missing or nonpositive sensitivity fields are omitted, without substituting the editable profile ISF.
+
+AAPS commonly uploads **Dev** and **BGI** in the suggested result's `reason` text, formatted in the phone's glucose units. Choose **AndroidAPS glucose units (Dev/BGI reason text)** in the connection form, then refresh. Leaving it unspecified keeps those curves blank and shows a notice. Decimal points and decimal commas are supported. Select dates with consistent source units; do not combine a historical unit change in one load. The `units` field in a suggested result is an insulin amount, not a glucose-unit declaration.
+
+**Dev is the uploaded 30-minute projected deviation**, while **BGI is the uploaded 5-minute insulin impact**. The legend and graph note identify these different time bases. This is not a reconstruction of AAPS's raw five-minute Autosens deviation graph. No insulin action or sensitivity values are calculated by this app.
+
+Upstream references checked on 2026-09-24:
+- [AndroidAPS preferences](https://androidaps.readthedocs.io/en/latest/SettingUpAaps/Preferences.html)
+- [Dynamic ISF and TDD sensitivity ratio](https://androidaps.readthedocs.io/en/latest/DailyLifeWithAaps/DynamicISF.html)
+- [AAPS serialized result fields](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/core/interfaces/src/main/kotlin/app/aaps/core/interfaces/aps/RT.kt)
+- [AAPS Dev/BGI calculation and formatted reason](https://github.com/nightscout/AndroidAPS/blob/598e2eb39c7e15876e4c42876a2162bffcb4fe5f/plugins/aps/src/main/kotlin/app/aaps/plugins/aps/openAPSSMB/DetermineBasalSMB.kt)
+
+Other possible uploaded fields include insulin activity and basal IOB; effective ISF from the reason; `isfMgdlForCarbs`; eventual/predicted glucose; and insulin/carbohydrate requirements. Availability depends on AAPS version, algorithm and upload settings. Raw Autosens internals (such as valid-deviation flags, deviation slopes, absorption classification and full TDD inputs) are not all standard Nightscout device-status fields. These extra layers are not implemented in this release.
+
+### General AndroidAPS settings
+
+Overview → **General AndroidAPS settings** records eight optional preferences: `min_5m_carbimpact`, meal max absorption time, maximum temporary basal U/h, maximum total OpenAPS IOB, DynamicISF Adjustment Factor, SMB frequency, and the SMB/UAM basal-minute limits. Units and names follow AAPS. The carb-impact setting uses mg/dL per five minutes, even for a mmol/L profile. These are historical values, not clinical defaults or validated AAPS configuration limits.
+
+Fields start blank and support undo/redo, review, save and overwrite. Viewing an older profile does not create an edit. They are stored in JSON under `overview.aaps_settings`. Excel exports include an **AAPS settings** sheet with the profile-sheet association, stable key, readable label, unit and value. Keep that association when importing. Old workbooks without this sheet remain compatible. These fields do not configure AndroidAPS or change recorded Nightscout data.
+
+
 Build: **Nightscout-8.4**. This label also appears at the top of the sidebar, so you can confirm you are running this update.
 
 A local Python app for creating diabetes profile versions by comparing a draft with one or two saved references. Includes your **LenStandardV17** example in the **Standard** category, with **DIA 8.5 hours**. The `Undefined` field is omitted.

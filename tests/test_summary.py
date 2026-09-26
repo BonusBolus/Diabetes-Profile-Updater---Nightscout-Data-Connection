@@ -20,7 +20,7 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(stats.iloc[0]['days'],2)
             self.assertTrue(pd.isna(stats.iloc[1]['median']))
         profile=go.Figure(go.Scatter(x=[0,1440],y=[1,1]))
-        figures=graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',['IOB','COB','Boluses','Carbs'],'mmol/L',True)
+        figures=graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',['IOB + boluses','COB + carbs'],'mmol/L',True)
         self.assertEqual(len(figures),5) # profile, IOB, COB, two hourly graphs
         for fig in figures[1:3]:
             self.assertEqual(sum(t.meta and t.meta.get('kind')=='median' for t in fig.data if t.meta),1)
