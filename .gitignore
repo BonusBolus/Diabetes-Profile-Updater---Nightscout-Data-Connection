@@ -4,3 +4,6 @@ examples/
 data/
 __pycache__/
 *.py[cod]
+graph_configurations/
+
+report_configurations/

@@ -8,24 +8,43 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+from garmin_data import METRICS, GARMIN_LAYERS, SLEEP_OVERLAYS, metric_unit
+from garmin_charts import garmin_traces, apply_garmin_axis, activity_shapes
 from appearance import palette
 from chart_cache import cached
 from nightscout_stats import continuous_summary, hourly_events
+from event_stats import EVENT_LAYERS, EVENT_LABELS, hourly_state_events
 from nightscout import UTC, glucose_summary, local_points
 
-LAYERS = {"Glucose": "glucose", "Temporary basal": "basal",
-          "IOB + boluses": "iob_bolus", "COB + carbs": "cob_carbs",
-          "Nightscout targets": "target", "Variable sensitivity": "variable_sens",
-          "Custom graph": "custom"}
-OVERLAY_CHOICES = ["None", "Glucose", "Temporary basal", "IOB + boluses", "COB + carbs", "Nightscout targets", "Variable sensitivity"]
-OVERLAYS = {"Glucose":["glucose"], "Temporary basal":["basal"],
-            "IOB + boluses":["iob","bolus"], "COB + carbs":["cob","carbs"],
-            "Nightscout targets":["target"], "Variable sensitivity":["variable_sens"]}
+DIABETES_LAYERS = {"Glucose":"glucose", "COB + Carbs":"cob_carbs", "IOB + Boluses":"iob_bolus",
+                   "Temporary Basal":"basal", "Temporary Targets":"target", "Variable Sensitivity":"variable_sens"}
+GARMIN_MAIN_LAYERS = {"Garmin · Steps":"g_steps", "Garmin · Heart Rate":"g_hr", "Garmin · Activity":"g_workout",
+                      "Garmin · Stress":"g_stress", "Garmin · Sleep":"g_sleep", "Garmin · Respiration":"g_waking_rr"}
+DIABETES_LAYERS.update(EVENT_LAYERS)
+LAYERS = {**DIABETES_LAYERS, **GARMIN_MAIN_LAYERS, "Custom graph":"custom"}
+LAYER_ALIASES = {"Garmin · Cumulative steps":"Garmin · Steps", "COB + carbs":"COB + Carbs", "IOB + boluses":"IOB + Boluses", "Temporary basal":"Temporary Basal",
+                 "Nightscout targets":"Temporary Targets", "Variable sensitivity":"Variable Sensitivity",
+                 "Garmin · Heart rate":"Garmin · Heart Rate", "Garmin · Activities":"Garmin · Activity", "Garmin · Workout":"Garmin · Activity",
+                 "IOB":"IOB + Boluses", "Boluses":"IOB + Boluses", "COB":"COB + Carbs", "Carbs":"COB + Carbs"}
+LAYER_ALIASES.update({label:'Garmin · Sleep' for label,key in GARMIN_LAYERS.items() if key.startswith('g_sleep_') or key in ('g_hrv','g_spo2')})
+LAYER_ALIASES.update({label:'Garmin · Activity' for label,key in GARMIN_LAYERS.items() if key.startswith('g_workout_')})
+
+LAYER_ALIASES.update({label.replace('Activity ', 'Workout '):'Garmin · Activity' for label,key in GARMIN_LAYERS.items() if key.startswith('g_workout_')})
+
+def normalize_layers(layers):
+    return list(dict.fromkeys(LAYER_ALIASES.get(label,label) for label in layers if LAYER_ALIASES.get(label,label) in LAYERS))
+
+OVERLAYS = {"Glucose":["glucose"], "COB + Carbs":["cob","carbs"], "IOB + Boluses":["iob","bolus"],
+            "Temporary Basal":["basal"], "Temporary Targets":["target"], "Variable Sensitivity":["variable_sens"]}
+OVERLAYS.update({label:[key] for label,key in GARMIN_LAYERS.items() if key!='g_activity'})
+OVERLAY_CHOICES = ["None", *OVERLAYS]
 COLORS = {"glucose": "#32cd32", "basal": "#00cfe8", "basal_percent": "#00cfe8",
           "iob": "#2196f3", "bolus": "#42baf5", "carbs": "#ff9800", "cob": "#ff9800", "target": "#64d86a", "variable_sens":"#eeeeee"}
 TELEMETRY_LABELS = {'variable_sens':'Variable sensitivity'}
 GLUCOSE_UNITS = ('glucose', 'variable_sens')
-GROUP_KEYS = {'iob_bolus':['iob','bolus'], 'cob_carbs':['cob','carbs']}
+GROUP_KEYS = {'iob_bolus':['iob','bolus'], 'cob_carbs':['cob','carbs'],
+              'g_sleep':['g_sleep'],
+              'g_workout':['g_workout_hr','g_workout_speed','g_workout_altitude','g_workout_power','g_workout_cadence']}
 
 
 def telemetry_unit(key, unit):
@@ -79,8 +98,8 @@ def target_reason(reason):
 def event_sizes(values, key):
     # Fixed scales across days; sqrt makes visible area roughly proportional to
     # amount, with readable minimums and capped large events. Units stay separate.
-    factor = 11 if key == 'bolus' else 3
-    return [max(6,min(30,factor*math.sqrt(max(0,y)))) if y is not None else 6 for y in values]
+    factor = 10 if key == 'bolus' else 2.5
+    return [max(5,min(22,factor*math.sqrt(max(0,y)))) if y is not None else 5 for y in values]
 
 
 DASHES = ["solid", "dash", "dot", "dashdot", "longdash", "longdashdot"]
@@ -205,12 +224,14 @@ def display_traces(key, loaded, days, mode, unit, dark):
 
 
 def dataset_color(key,dark):
+    if key in METRICS:return METRICS[key][2]
     if dark:return COLORS[key]
     return {"glucose":"#218c24", "basal":"#0089a4", "basal_percent":"#0089a4",
                  "iob":"#177cb8", "bolus":"#177cb8", "carbs":"#bf7100", "cob":"#bf7100", "target":"#24843b", "variable_sens":"#4b5563"}[key]
 
 
 def _dataset_traces(key, loaded, days, mode, unit, dark):
+    if key in METRICS:return garmin_traces(key,loaded,days,mode)
     data, zone = loaded['data'], loaded['zone']
     frame = data.get(key, pd.DataFrame())
     color = dataset_color(key,dark)
@@ -271,24 +292,31 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
         for group,xs,ys,labels in groups:
             if not xs:
                 continue
-            symbol = 'line-ew' if group=='User bolus' else 'triangle-up' if group=='SMB' else 'diamond-open' if key=='bolus' else 'diamond' if key=='carbs' else ['circle','square','diamond','cross'][index%4]
+            symbol = 'square' if group=='User bolus' else 'triangle-up' if group=='SMB' else 'square-open' if key=='bolus' else 'circle' if key=='carbs' else ['circle','square','diamond','cross'][index%4]
             marker_color = color
             if key=='glucose':
                 scale=1 if unit=='mmol/L' else 18
                 marker_color=['#f44336' if y is not None and y<4*scale else '#ff9800' if y is not None and y>10*scale else color for y in ys]
-            sizes = event_sizes(ys,key) if key in ('carbs','bolus') else 5
+            sizes = [max(4,min(18,20*math.sqrt(max(0,y)))) for y in ys] if group=='SMB' else event_sizes(ys,key) if key in ('carbs','bolus') else 5
+            smb = group=='SMB'
             amount_labels = key=='carbs' or group=='User bolus'
-            traces.append(go.Scatter(x=xs,y=ys,customdata=labels,name=group,
-                meta=dict(label=group,unit=sample_unit,date=str(day),kind=key,legend_entry=True),
+            traces.append(go.Scatter(x=xs,y=[0 for y in ys] if smb else ys,customdata=[[text,dose] for text,dose in zip(labels,ys)] if smb else labels,name=group,
+                meta=dict(label=group,unit=sample_unit,date=str(day),kind=key,legend_entry=key not in ('bolus','carbs'),baseline_smb=smb),
                 text=[f'{y:g} {sample_unit}' if y is not None else '' for y in ys] if amount_labels else None,
-                textposition='top center',textfont=dict(size=12,color=color),cliponaxis=not amount_labels,
+                textposition='top center',textfont=dict(size=12,color=color),cliponaxis=not (amount_labels or smb),
                 legendgroup=group,mode='markers+text' if amount_labels else 'markers' if key in ('carbs','bolus') else 'lines+markers' if key=='glucose' else 'lines',
                 line=dict(color=color,width=2,dash='solid' if key in ('iob','cob') else dash,shape='hv' if key.startswith('basal') or key=='cob' else 'linear'),
                 marker=dict(color=marker_color,symbol=symbol,size=sizes,
-                            line=dict(color=color,width=[v*.55 for v in sizes]) if group=='User bolus' else dict(width=0)),
+                            **(dict(angle=[0 if i%2==0 else 180 for i in range(len(ys))],standoff=[v/2+2 for v in sizes]) if smb else {}),
+                            line=dict(color=color,width=.75) if key in ('bolus','carbs') else dict(width=0)),
                 fill='tozeroy' if key in ('basal','basal_percent','cob','iob') else None,
                 fillcolor=rgba(color,.24 if mode=='One day' else .10), connectgaps=False,
-                hovertemplate='%{customdata}<br>%{y:.3f} '+sample_unit+'<extra>'+escape(group)+'</extra>'))
+                hovertemplate=('%{customdata[0]}<br>%{customdata[1]:.3g} U<extra>SMB</extra>' if smb else '%{customdata}<br>%{y:.3f} '+sample_unit+'<extra>'+escape(group)+'</extra>')))
+    if key in ('bolus','carbs'):
+        for group in dict.fromkeys(t.name for t in traces):
+            traces.append(go.Scatter(x=[None],y=[None],name=group,legendgroup=group,mode='markers',
+                marker=dict(color=color,symbol='triangle-up' if group=='SMB' else 'circle' if key=='carbs' else 'square' if group=='User bolus' else 'square-open',size=8),
+                showlegend=True,hoverinfo='skip',meta=dict(kind='event_legend',legend_entry=True,legend_proxy=True)))
     return traces
 
 
@@ -334,8 +362,10 @@ def glucose_axis(fig, loaded, days, unit, secondary=False, fixed_band=True):
                                  yaxis='y2' if secondary else 'y'))
 
 
-def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False):
+def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False, data_only=False):
     """Return a pinned profile figure followed by independent, time-aligned panels."""
+    layers=normalize_layers(layers)
+    overlay={'Nightscout targets':'Temporary Targets','Temporary basal':'Temporary Basal','COB + carbs':'COB + Carbs','IOB + boluses':'IOB + Boluses','Variable sensitivity':'Variable Sensitivity'}.get(overlay,overlay)
     dates=date_label(days)
     title=profile_figure.layout.title.text or 'Profile'
     title = title.split(' · ')[0]+' · '+dates
@@ -354,17 +384,20 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         if key=='glucose' and show_targets:
             for trace in dataset_traces('target',loaded,days,mode,unit,dark):
                 top.add_trace(trace,secondary_y=True)
-        overlay_unit={'glucose':unit,'target':unit,'basal':'U/h','iob':'U','bolus':'U','carbs':'g','cob':'g',**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}}[key]
+        overlay_unit={'glucose':unit,'target':unit,'basal':'U/h','iob':'U','bolus':'U','carbs':'g','cob':'g',**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}, **{k:metric_unit(k,loaded) for k in METRICS}}[key]
         top.update_yaxes(title_text=overlay_unit,secondary_y=True,showgrid=False)
         if key=='glucose':
             glucose_axis(top,loaded,days,unit,secondary=True)
         elif key=='target':
             top.update_yaxes(range=[0,20 if unit=='mmol/L' else 360],autorange=False,secondary_y=True)
-    style_figure(top,title,profile_figure.layout.yaxis.title.text,loaded['zone'],dark,height=310)
+    style_figure(top,title,profile_figure.layout.yaxis.title.text,loaded['zone'],dark,height=250)
     top.layout.yaxis.rangemode = profile_figure.layout.yaxis.rangemode or 'normal'
     if overlay!='None':
         top.update_yaxes(showgrid=False,secondary_y=True)
-    if overlay!='None' and same_scale:
+    if overlay!='None' and key in METRICS:
+        top.update_layout(shapes=activity_shapes(loaded,days,mode))
+        apply_garmin_axis(top,key,mode,secondary=True)
+    if overlay!='None' and same_scale and key not in ('g_sleep','g_activity'):
         # Match numeric limits, without converting between different quantities.
         values=[float(y) for trace in top.data for y in trace.y if y is not None and pd.notna(y)]
         bounds=[0]+values
@@ -416,6 +449,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
             fig.update_yaxes(range=[0,20 if unit=='mmol/L' else 360],autorange=False)
         if not has_records:
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
+        fig.update_layout(meta=dict(fig.layout.meta or {},dataset=active[0]))
         figures.append(fig)
     if 'variable_sens' in selected:
         fig=go.Figure(dataset_traces('variable_sens',loaded,days,mode,unit,dark))
@@ -425,6 +459,34 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         if not any(any(pd.notna(y) for y in t.y) for t in fig.data):
             fig.add_annotation(text='No recorded data for the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
         figures.append(fig)
+    for key in METRICS:
+        if key not in selected:continue
+        if key.startswith('g_sleep_') and key not in loaded['data']:continue
+        label,ylabel,*_=METRICS[key]
+        ylabel=metric_unit(key,loaded)
+        fig=go.Figure(dataset_traces(key,loaded,days,mode,unit,dark))
+        style_figure(fig,f'{label} · {dates}',ylabel,loaded['zone'],dark)
+        fig.update_layout(meta=dict(fig.layout.meta or {},dataset=key))
+        if key=='g_steps':
+            for trace in dataset_traces('g_steps_cumulative',loaded,days,mode,unit,dark):
+                fig.add_trace(trace)
+        if key.startswith('g_'):
+            fig.update_layout(shapes=activity_shapes(loaded,days,mode),meta=dict(fig.layout.meta or {},activity_bands=True))
+        if key=='g_sleep':
+            extras=[k for k in SLEEP_OVERLAYS.values() if k in loaded['data']]
+            fig.update_layout(height=310,meta=dict(fig.layout.meta or {},sleep_fields=extras))
+            for extra in extras:
+                for trace in dataset_traces(extra,loaded,days,mode,unit,dark):
+                    trace.meta=dict(trace.meta or {},sleep_overlay=True)
+                    trace.visible=False
+                    fig.add_trace(trace)
+            fig.update_layout(legend=dict(y=-.25,maxheight=.3))
+        if key.startswith('g_workout_'):fig.update_layout(height=245)
+        if not fig.data:fig.add_annotation(text='No recorded '+label.lower()+' in this database',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
+        apply_garmin_axis(fig,key,mode)
+        figures.append(fig)
+    for key in EVENT_LABELS:
+        if key in selected:figures.append(hourly_figure(loaded,key,days,dark))
     if 'custom' in selected:
         fig=go.Figure()
         style_figure(fig,f'Custom graph · {dates}','',loaded['zone'],dark,height=390)
@@ -432,6 +494,9 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         figures.append(fig)
     if summary_layout:
         figures.extend(hourly_figure(loaded,key,days,dark) for key in ('bolus','carbs') if key in selected)
+    rank={'glucose':0,'cob':1,'carbs':1,'iob':2,'bolus':2,'basal':3,'basal_percent':3,'target':4,'variable_sens':5,'profile_percentage':5.1,'site_changes':5.2,'sensor_changes':5.3,
+          'g_steps':6,'g_steps_cumulative':6.5,'g_hr':7,**{k:8+i/10 for i,k in enumerate(GROUP_KEYS['g_workout'])},'g_stress':9,'g_sleep':10,'g_waking_rr':11}
+    figures=[figures[0]]+sorted(figures[1:],key=lambda f:rank.get((f.layout.meta or {}).get('dataset'),12))
     for figure in figures:
         event_label_headroom(figure)
         add_profile_guides(figure,changes,dark)
@@ -440,11 +505,11 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
 
 
 def hourly_figure(loaded, key, days, dark, exclude_smb=False):
-    stats=cached(loaded,'hourly',(key,tuple(days),exclude_smb),lambda: hourly_events(loaded,key,days,exclude_smb))
-    label,unit=('Boluses','U') if key=='bolus' else ('Carbs','g')
+    stats=cached(loaded,'hourly',(key,tuple(days),exclude_smb),lambda: hourly_state_events(loaded,key,days) if key in EVENT_LABELS else hourly_events(loaded,key,days,exclude_smb))
+    label,unit=(EVENT_LABELS[key][:2] if key in EVENT_LABELS else ('Boluses','U') if key=='bolus' else ('Carbs','g'))
     if key == 'bolus' and exclude_smb:
         label = 'Boluses (no SMB)'
-    color=COLORS[key];theme=palette(dark)
+    color=EVENT_LABELS[key][2] if key in EVENT_LABELS else COLORS[key];theme=palette(dark)
     fig=make_subplots(rows=2,cols=1,shared_xaxes=True,row_heights=[.68,.32],vertical_spacing=.14)
     details=[[[day,f'{hour:02}:00–{hour+1:02}:00',value,stats['counts'][i][hour],stats['status'][i][hour],stats['complete'][i][hour]]
               for hour,value in enumerate(row)] for i,(day,row) in enumerate(zip(stats['days'],stats['values']))]
@@ -452,7 +517,7 @@ def hourly_figure(loaded, key, days, dark, exclude_smb=False):
         colorscale=[[0,theme['surface']],[1,color]],zmin=0,xgap=1,ygap=1,hoverongaps=False,
         colorbar=dict(title=dict(text=unit),len=.6,y=.7,thickness=10),
         name=label+' hourly',meta=dict(kind='hourly_heatmap',label=label,unit=unit,dataset=key),
-        hovertemplate='%{customdata[0]} · %{customdata[1]}<br>%{z:.3g} '+unit+' · %{customdata[3]} events<extra></extra>'),row=1,col=1)
+        hovertemplate='%{customdata[0]} · %{customdata[1]}<br>%{z:.3g} '+unit+'<br>%{customdata[4]}<extra></extra>'),row=1,col=1)
     fig.add_trace(go.Bar(x=[30+60*h for h in range(24)],y=stats['average'],width=55,marker_color=color,
         customdata=stats['contributing'],name='Average hourly '+label.lower(),showlegend=False,
         meta=dict(kind='hourly_histogram',label='Average hourly '+label.lower(),unit=unit,dataset=key),
@@ -466,7 +531,7 @@ def hourly_figure(loaded, key, days, dark, exclude_smb=False):
     fig.update_yaxes(title_text='Average '+unit,rangemode='tozero',row=2,col=1)
     fig.layout.meta=dict(zone=loaded['zone'],kind='hourly',dataset=key,exclude_smb=exclude_smb)
     if all(v is None for row in stats['values'] for v in row):
-        fig.add_annotation(text='No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)
+        fig.add_annotation(text='No known effective profile data' if key=='profile_percentage' else 'No available treatment data',xref='paper',yref='paper',x=.5,y=.7,showarrow=False)
     return fig
 
 

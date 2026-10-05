@@ -130,7 +130,7 @@ class NightscoutClient:
 
 
 def normalize_data(entries, treatments, statuses, start, end):
-    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob", "variable_sens")}
+    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob", "variable_sens", "changes")}
     temps, targets, warnings = [], [], []
     rejected = 0
     def add(key, at, value, label=""):
@@ -159,6 +159,8 @@ def normalize_data(entries, treatments, statuses, start, end):
             seen.add(identity)
         at = timestamp(row.get("created_at")) or timestamp(row.get("date"))
         event = row.get("eventType", "Treatment")
+        if event in ("Site Change", "Sensor Start", "Sensor Change", "Insulin Change"):
+            add("changes", at, 1, event)
         for field, key in (("insulin", "bolus"), ("carbs", "carbs")):
             if numeric(row.get(field)) is not None and numeric(row[field]) > 0:
                 if key == "bolus":
@@ -219,7 +221,7 @@ def normalize_data(entries, treatments, statuses, start, end):
     data = {}
     for key, values in points.items():
         frame = pd.DataFrame(values, columns=["time", "value", "label"]).sort_values("time")
-        if key not in ("bolus", "carbs"):
+        if key not in ("bolus", "carbs", "changes"):
             frame = frame.drop_duplicates("time", keep="last")
         data[key] = frame.reset_index(drop=True)
     intervals = {"basal": [], "basal_percent": []}
@@ -270,7 +272,7 @@ def load_nightscout(url, token, first, last, zone):
             except NightscoutError as exc:
                 warnings.append(f"The {event.lower()} crossing the start date could not be checked: " + str(exc))
         try:
-            prior = client.get("treatments", {"find[originalProfileName][$exists]": "true", "find[created_at][$lt]": _iso(start),
+            prior = client.get("treatments", {"find[originalProfileName][$exists]": "true", "find[eventType][$ne]": "Profile Switch", "find[created_at][$lt]": _iso(start),
                                             "find[isValid][$ne]": "false", "count": 1})
             treatments = prior + treatments
         except NightscoutError as exc:
@@ -283,7 +285,8 @@ def load_nightscout(url, token, first, last, zone):
     data, issues = normalize_data(entries, treatments, statuses, start, end)
     return {"data": data, "warnings": warnings + issues, "first": first, "last": last, "zone": zone,
             "site": client.url, "loaded_at": datetime.now(UTC),
-            "availability": {"glucose": True, "treatments": treatments_available}}
+            "availability": {"glucose": True, "treatments": treatments_available},
+            "recorded_profiles": recorded_profiles(treatments, start, end)}
 
 
 def local_points(frame, zone, days):
@@ -431,7 +434,8 @@ def daily_summary(loaded, days, unit):
     for day in sorted(set(days)):
         start, end = utc_bounds(day, day, zone)
         until = max(start, min(end, loaded['loaded_at']))
-        expected = math.ceil((until-start).total_seconds()/300)
+        in_source=loaded.get('nightscout_first',day)<=day<=loaded.get('nightscout_last',day)
+        expected = math.ceil((until-start).total_seconds()/300) if in_source else 0
         points = data['glucose']
         points = points[(points['time']>=start) & (points['time']<until)].copy()
         if not points.empty:
@@ -456,8 +460,53 @@ def daily_summary(loaded, days, unit):
         # snapshots can still report totals when they contain actual events.
         for key in ('carbs','bolus'):
             frame = data[key]
-            known = availability is True or (availability is None and not frame.empty)
+            known = (availability is True or (availability is None and not frame.empty)) and loaded.get('nightscout_first',day)<=day<=loaded.get('nightscout_last',day)
             selected = frame[(frame['time']>=start) & (frame['time']<until)]
             row[key] = float(selected['value'].sum()) if known and until>start else None
         result.append(row)
+    return result
+
+
+def recorded_profiles(treatments, start, end):
+    """Only AAPS effective switches establish which profile actually ran.
+
+    Their profileJson already includes percentage/time-shift changes. Missing
+    JSON ends the known state; it must not extend the preceding valid profile.
+    """
+    fields=('timezone','units','dia','basal','carbratio','sens','target_low','target_high')
+    bases={}
+    for row in treatments:
+        if row.get('isValid') is False or row.get('eventType')!='Profile Switch':continue
+        at=timestamp(row.get('created_at')) or timestamp(row.get('date'))
+        if at is None or at>=end:continue
+        raw=row.get('profileJson')
+        try:raw=json.loads(raw) if isinstance(raw,str) else raw
+        except (ValueError,TypeError):continue
+        if isinstance(raw,dict):
+            name=row.get('originalProfileName') or row.get('profile')
+            bases.setdefault(name,[]).append((at,{k:raw[k] for k in fields if k in raw}))
+    switches={}
+    for row in treatments:
+        if row.get('isValid') is False or 'originalProfileName' not in row or row.get('eventType')=='Profile Switch':continue
+        at=timestamp(row.get('created_at')) or timestamp(row.get('date'))
+        if at is None or at>=end:continue
+        raw=row.get('profileJson')
+        try:raw=json.loads(raw) if isinstance(raw,str) else raw
+        except (ValueError,TypeError):raw=None
+        profile={k:raw[k] for k in fields if k in raw} if isinstance(raw,dict) else {}
+        switches[at]=dict(name=str(row.get('originalProfileName') or 'Unnamed profile'),profile=profile,
+                          percentage=numeric(row.get('originalPercentage')),timeshift=numeric(row.get('originalTimeshift')),
+                          active_at=at.isoformat(),explicit_end=timestamp(row.get('originalEnd')))
+    times=sorted(switches);result=[]
+    for i,at in enumerate(times):
+        stop=min(end,times[i+1] if i+1<len(times) else end)
+        state=switches[at].copy();expiry=state.pop('explicit_end')
+        if expiry is not None and expiry>at:stop=min(stop,expiry)
+        base=None
+        # Requested switches contain unmodified JSON; they do not prove activation.
+        candidates=[item for item in bases.get(state['name'],[]) if item[0]<=at]
+        if candidates:base=max(candidates,key=lambda c:c[0])[1]
+        if base is None and state['percentage']==100 and state['timeshift'] in (None,0):base=state['profile']
+        state['base_profile']=base
+        if stop>max(start,at):result.append(dict(state,start=max(start,at).isoformat(),end=stop.isoformat()))
     return result

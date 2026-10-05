@@ -1,5 +1,277 @@
 # Profile Studio
 
+## Health-26: compact events and multi-day distributions
+
+Extract all update files into your existing project, including `event_stats.py` and all JavaScript files. Preserve `data/`, `examples/`, `graph_configurations/`, `report_configurations/` and `.venv/`. Restart and check **Build: Health-26**. No new application dependencies.
+
+- Profile switches use separate line styles per base profile, with base names in the legend. Only percentages appear above the plot; hover reveals the date, base name and percentage. Close switches keep their lines but share annotation space, preventing stacks of repeated names. Actual switches are not drawn on an across-day median.
+- SMB uses compact alternating triangles; manual boluses use squares; carbs use circles. Amount-based sizes have a cap, and legends use fixed-size symbols. Hover retains exact amounts, including large doses beyond the size cap.
+- Event controls immediately reflect the selected state and save it with graph configurations.
+- New **Profile percentage**, **Site changes** and **Sensor changes** layers use day/hour grids plus Average/Median bars. Profile percentages are duration-weighted per hour; only fully known hours contribute to the aggregate bars. Change events count explicit uploaded records. Sensor starts can be restarts, not necessarily physical replacements.
+- Choose **One day** or **Date range**, then use the global Median toggle to switch all selected graphs between multiple-day overlays and median summaries. Existing saved mode strings remain supported.
+- Median sleep defaults to hourly average minutes asleep, split by stage, across selected dates with known sleep-stage records. Within included dates, hours without recorded sleep contribute zero. Entire dates without stage records are excluded and are not assumed awake. Awake intervals are excluded from minutes asleep. This is a distribution of recorded sleep, not evidence of uninterrupted coverage. Hover shows the denominator. The Average/Median bar toggle also supports median hourly sleep duration (all stages combined). **Stage composition** retains the old conditional percentages among observed dates in each five-minute bin.
+- Report preview appears above its download button. Reports skip plots without visible recorded values after graph settings are applied. Valid observed zeros are retained. Legends use fixed-size symbols; the existing HTML/PDF graph renderer is shared.
+
+## Health-25: in-graph hover, effective profile events and report layouts
+
+Extract **all update files** into your existing project, including `filled_regions.js`, `profile_events.py`, `report_config.py`, all report JavaScript/CSS and `graph_component/`. Keep `data/`, `examples/`, `graph_configurations/`, `report_configurations/` and `.venv/`. Restart and check **Build: Health-25**. No new application dependencies. Reload Nightscout after installing so the snapshot includes the updated effective-profile history.
+
+- **Hover:** a small readout follows the selected point inside its graph. The selection outline is thinner and less prominent. The actual SMB dose is retained, along with the existing synchronized time guides. Hover values no longer occupy the overview toolbar.
+- **General settings:** subtle dividers group Profile, Activity and Events controls. Site and sensor visibility can be selected independently; their existing Glucose / All time graphs / Off scope remains available.
+- **Profile switches:** enable **Profile switches** and/or **Profile % shading** in Events. Only uploaded AAPS effective states establish activation times. Labels show the base profile and its percentage; consecutive states within the same base may show the percentage alone to reduce overlap. Labels include the recorded date in multi-day views. Requested switches supply base definitions but are not assumed to be active events. Controls are disabled when effective history is unavailable.
+- **Percentage shading:** periods below 100% use blue, above 100% orange; opacity increases with distance from 100%. The 100% state is unshaded. Intervals stop at the next effective switch or an explicitly uploaded end, and are clipped to the loaded day and observation window. No return to 100% is invented when the corresponding record is missing. Event selections are retained in saved graph configurations.
+- **Base profiles in reports:** percentage-adjusted schedules no longer produce duplicate profile definitions or pages of repeated active intervals. The base schedule comes from uploaded unmodified switch JSON or a known 100%, unshifted state. If a base schedule is unavailable, its fields are marked unavailable instead of substituting adjusted values. Distinct changes to a base schedule remain distinct definitions.
+- **Shading:** disconnected filled curves and variability bands are converted to separate, explicitly closed regions after the shared graph transformations. This prevents diagonal shading across missing data in both interactive graphs and exported SVG/HTML/PDF charts. Temporary-target regions and activity/event overlays use the same renderer in both views.
+- **Report layout:** choose **Landscape** or **Portrait · vertical stack**, then **1–6 graphs per page**. Plotly dimensions, axis fonts and legend spacing adapt to the available slots. Complex sleep graphs with multiple panels occupy additional slots to keep their axes readable. Page titles describe the plots on that page, including selected data in custom graphs.
+- **Saved PDF settings:** in **Export report**, enter a preset name and click **Save PDF settings**. Select it later from **Saved PDF settings**. Presets are JSON files in `report_configurations/` and restore title, dates, daily time window, sections, orientation and page capacity. They are separate from graph configurations; the report still uses the currently selected graphs. Dates outside the loaded snapshot must be adjusted or loaded first.
+- **Valid selections:** median and multi-day pages are disabled for a one-day export. Options requiring Nightscout records or profile history are disabled when that source is unavailable. Invalid dates/time windows and ranges over 31 days disable report preparation.
+
+Export remains **Prepare report → download/open the HTML preview → Print / Save as PDF**. Select A4 and the orientation chosen in the report; disable browser headers/footers.
+
+Validation: 132 automated regression checks passed. Browser checks cover actual point hovering, PDF preset save/reload, single-day option prevention, and report settings capture. Four-slot portrait and landscape reports were rendered and visually checked, including filled curves with missing sections and sleep/custom graphs. Testing used synthetic records, not your live Nightscout account.
+
+These notes take precedence over earlier releases below.
+
+## Health-24: report export and site/sensor change markers
+
+Extract **all update files** into your existing project, including the new `report_*.py`, `report_*.js`, `report_document.css`, and `graph_component/` files. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-24**. No new application dependencies.
+
+- **Export report:** in the graph toolbar, choose the dates, daily time window and report sections, then **Prepare report**. Download the report preview beneath the graphs, open the HTML file in Chrome or Edge, wait for its charts, and choose **Print / Save as PDF**. Use A4 landscape with browser headers/footers disabled. The preview works offline and includes the graph renderer; there is no external reporting service.
+- **Seven optional sections:** overview, used profiles, median selected graphs, daily statistics, daily graphs, all days overlaid, and glucose distribution. Small graphs share pages; larger graphs get a full page. Your selected layers, graph order, custom graphs, overlays and filters are retained. Export up to 31 loaded days per report. Time windows clip graphs; hourly bins retain whole-hour totals and cumulative steps remain totals since the start of each day.
+- **Used profiles:** includes effective profiles recorded by Nightscout during the export period, with active intervals and schedules. It does not substitute the editor draft or saved profile collection. Missing profile history is identified explicitly. Reload Nightscout after installing this update to retrieve this history.
+- **Core statistics:** glucose mean, minimum/maximum, SD, CV, quartiles, coverage, range percentages, recorded boluses/carbs and explicit change counts. Glucose statistics use one median per observed five-minute bin to avoid giving duplicate uploads extra weight. Range summaries show 4–10 mmol/L and 3.9–10 mmol/L, converted for mg/dL. Missing data is not filled with invented readings. Estimated A1c, GVI, PGS and other risk scores are omitted. Recorded bolus totals are not total insulin delivery.
+- **Site/sensor changes:** reload Nightscout, then use **Site / sensor changes** in the general graph settings: **Glucose**, **All time graphs**, or **Off**. Blue dotted markers show explicit Site Change records; purple markers show Sensor Start/Sensor Change records. Simultaneous site and sensor labels occupy separate rows. Events are not inferred from glucose gaps or free-text notes. The selection is saved with graph configurations.
+- **Local files:** the downloaded preview contains personal health data, including the selected graph data used to render the report. Credentials are excluded. Both Profile Studio and printing run on your computer; keep it awake until generation finishes.
+
+Validation: 128 automated checks passed (full regression suite plus the final report checks). A synthetic report covering all seven sections was rendered in Chromium, printed to a 34-page PDF and checked for clipped page content. Export controls were also exercised in the browser. Your live Nightscout installation was not accessed for these tests.
+
+These notes take precedence over earlier releases below.
+
+## Health-23: clear hover selection and a compact overlay dropdown
+
+Extract all update files into your existing project. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-23**. No dependency changes.
+
+- **Top overlay selection:** a single dropdown replaces the many overlay buttons. All datasets, saved selections, same-axis controls and expanded-view behavior remain available.
+- **Selected point:** the hover outline follows the actual rendered event marker. This accounts for the offset and alternating direction of SMB triangles, and outlines user bolus and carb markers at their visible positions. Bars, sleep stages, heatmap cells and line points retain their existing selection highlights.
+- **Readout:** the selected value is larger, boxed and briefly emphasized. The series name has a matching color accent. The readout always describes the selected point; SMB uses its recorded dose, not its plotting baseline. Reduced-motion preferences disable the emphasis animation.
+- **Normal-view scrolling:** when the toolbar is clipped by the outer page, a floating copy appears at the visible upper-right edge. It updates when the outer page scrolls and disappears when the toolbar is visible again. Scrolling the recorded panels clears the previous hover so the readout cannot remain attached to a point that moved away. No manual graph expansion is required. Viewport tracking uses the app's same-origin Streamlit frames; a cross-origin third-party embed may restrict ancestor viewport access.
+- **Hover performance:** rendered marker lookup is cached per plot render; hover/readout positioning is batched per animation frame and never redraws Plotly. Repeated events for the same point preserve the readout rather than restarting its animation.
+
+Validation: 123 automated checks passed, including rendered-marker geometry, scrolling viewport calculations, overlay selection, expanded view and saved configurations. Browser rendering on your installation has not been visually verified.
+
+These notes take precedence over earlier releases below.
+
+
+## Health-22: shared activity controls and compact graph layout
+
+Extract **all update files** into your existing project, including the JavaScript files and `graph_component/`. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-22**. No dependency changes.
+
+- **Loading:** dates, Nightscout credentials and Garmin inputs are submitted together in one form. Each load button makes one explicit refresh with the submitted values; typing does not load data. A failed refresh retains the last successful snapshot, and the displayed loaded-date label identifies that snapshot. Refresh all still attempts the other source if one fails. The exact reported intermittent “invalid combination” message has not been reproduced; this release hardens input submission and failure handling, rather than claiming a verified server-side diagnosis. If it recurs, capture the complete error text, without credentials.
+- **Activity settings:** one Activity shading toggle beside **Fit time axis to activity** controls profile, Nightscout, Garmin and custom time graphs. Date/hour heatmaps and other non-time plots are excluded. Activity colors, labels and intervals use the same shared data. Multi-day/median shading identifies the actual recorded date; it is contextual and does not represent a median activity.
+- **Preserved graph mode:** selecting or fitting an activity only zooms the shared time axis (with five minutes of padding). Median/multi-day dates and traces remain unchanged. **Full day** restores the normal time range.
+- **Compact layout:** full-width horizontal overlay chips replace the narrow column; settings remain visible in a separate, subtly colored box. Empty control boxes are hidden. The profile graph is 250 px tall, and the combined graph viewer is 1040 px tall, leaving more space for scrolling recorded graphs. Expanded view still uses the available screen.
+- **Axis controls:** move arrows sit above the Y-axis rail. The lower-bound slider follows the actual plot height and position, including after resizing, so it no longer extends into the legend or following panel.
+
+Validation: 122 automated regression checks passed, including Streamlit input submission and JavaScript graph-state/Plotly schema checks. The exact reported Nightscout error and visual rendering on your machine still need confirmation.
+
+These notes take precedence over earlier release notes below.
+
+
+## Health-21: open control boxes, sidebar custom graphs and precise hover
+
+Extract **all update files** into your existing project, including the JavaScript files and `graph_component/`. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-21**. No dependency changes.
+
+- **Graph controls:** Graph settings are always visible in a box above the graph on the left. Overlays have their own box on the right, including the pinned profile/glucose overlay controls. Move up/down buttons sit beside the left axis. Activity lower-axis sliders are vertical and next to that axis.
+- **Smoothing:** sliders retain their position and focus while dragging. Labels use a consistent minutes-and-seconds format. Activity and custom filtering offer 5 seconds through 30 minutes, with more slider positions allocated to short intervals. A change commits when the slider is released; activity/stress changes redraw the affected panels instead of the complete stack. Saved filter values remain supported.
+- **Custom Graphs:** use **Data layers → Custom → +** to create Custom 1, Custom 2, and so on. Each has a visibility checkbox and a delete button. Hiding retains its private dataset/filter/axis settings; deleting removes the panel. Named configurations include all panels and which ones are visible. The in-graph add/remove controls have moved to this sidebar section.
+- **One Steps layer:** cumulative steps are the default. One day shows that day's observed running total; Multiple days overlays independently accumulated daily curves with dated legends. Median + band shows the independently calculated **Median** and **25–75%** band. **Histogram** switches to hourly step increments, with an **Average/Median** toggle for aggregate views. The histogram statistic never changes the cumulative median. A band requires at least two observed days; identical totals give a zero-width band. Missing periods before the first observation stay unknown. Held totals remain last observed values, not proof of zero steps during gaps. The old Cumulative steps layer selection maps to Steps.
+- **Hover selection:** a contrasting outline follows the exact point supplying the readout, scaled to event marker size. Bars and heatmap cells receive rectangular outlines; secondary axes use their own coordinate transform. Only the selected graph's value is shown. Existing synchronized time guides remain. Hover updates are batched per animation frame, reuse cached graph bounds, and never trigger Plotly redraws. Filled bands and background annotations without hover data remain non-selectable.
+
+The notes below describe earlier releases; Health-21 takes precedence where behavior changed.
+
+## Health-20: independent custom panels and cumulative-step statistics
+
+Extract **all update files** into your existing project, including the JavaScript files and `graph_component/`. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-20**. No dependency changes.
+
+- **Content versus settings:** dataset and annotation controls use compact chips in a **Content** area. Display controls live in collapsible **Graph settings** areas. The shared activity selector, **Fit time axis to activity**, and **Full day** are in the top Graph settings area, including expanded view.
+- **Cumulative steps:** select **Garmin · Cumulative steps** as its own layer. In Multiple days and Median + band, its **Median** line and **25–75%** band are calculated from each day's independently accumulated curve, aligned to five-minute bins. They are independent of the step histogram's Average/Median setting. Both have legend entries. At least two observed days are needed for a band; identical daily totals produce a zero-width band. Missing periods before the first observation and future bins are excluded. Held totals indicate the last observed count, not proof that no steps occurred during a gap. Single-day mode retains the observed cumulative stair line.
+- **Activity filtering:** the five Activity metrics use the shared low-pass filter with a **5-second to 30-minute** time constant, adjustable in five-second increments. Standard stress filtering retains its existing 1–30 minute range. Filtering changes the displayed line; variability bands retain raw quartiles.
+- **Multiple Custom Graphs:** select Custom graph, then use **+ Add graph** or **+ Add custom graph**. Each panel has its own dataset chips, activity shading, speed/pace mode, per-field filtering, unit-shared or separate axes, and optional minimum/maximum axis limits. **Same axis scale** is available for one or two selected datasets with distinct axes. **Autoscale axes** clears manual limits. Each panel can be reordered or removed, including the final one; the add control remains available. Time navigation remains linked across panels. There is no fixed panel limit, although many panels increase browser rendering work.
+- **Saved configurations:** all Custom Graph panels and their settings are included in the existing named configuration save/load flow. Legacy single-panel configurations and minute-based activity filters migrate automatically. Old configurations that enabled cumulative steps also select its new layer. Dates remain navigation state rather than fixed configuration dates.
+- **Activity colors:** the existing low-opacity shared regions retain walking green, running orange/red, cycling blue, mountain biking brown and squash purple. Other recorded activity types keep their readable name, interval and shading with a neutral blue-grey fallback (`#90a4ae`). Unknown types are not discarded. Activities continue to come from Garmin/FIT records.
+
+Earlier release notes below describe behavior at the time of each release; the Health-20 notes take precedence.
+
+## Health-19: activity controls, sleep overlays and refresh all
+
+Extract **all update files** into your existing project, including the JavaScript files and `graph_component/`. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-19**. No dependency changes. Use **Refresh all data** beneath the load date range to reload both configured sources.
+
+- **Activity shading:** fill opacity is now 5.5%, with subtle boundaries and readable labels. Recorded Walking is light green (`#9ccc65`), Running orange/red (`#f16a43`), Mountain biking brown (`#a96c32`), Cycling/biking blue (`#42a5f5`), and Squash purple (`#ab6bd5`). Sport/sub-sport classification and colors are shared by all graphs. Activity regions remain actual recorded intervals, not inferred exercise.
+- **Activity naming and order:** user-facing Workout labels are now Activity; existing configurations and internal dataset IDs still work. Standard panels are Heart rate, Speed, Altitude, Power, Cadence. A saved custom panel order continues to take priority.
+- **Low-pass:** each of those five Activity panels has its own toggle and 1–30 minute slider. It uses the existing time-aware exponential filter, resets at existing trace breaks and gaps longer than five minutes, and preserves original timestamps and source samples. Higher values mean slower smoothing. The filtered line is a display transform; median variability bands remain the raw quartiles. The same signal settings apply to profile/custom overlays.
+- **Lower axis limits:** Heart rate, Speed, Power and Cadence each have a Lower slider. At 0 the existing min/max autoscale remains active. Raising it clips the lower displayed range while the upper bound follows samples within the visible time range. Move back to Auto to reset. Speed limits remain in **km/h**, including when viewing reversed **min/km** pace, where slow pace values are clipped instead. Limits do not delete samples. Existing same-scale settings and axes shared by multiple datasets retain priority.
+- **Glucose activity shading:** the toggle beside **Temp targets** enables the same Garmin regions, labels and colors, including in expanded view and a glucose/profile overlay. It starts off. Actual activity intervals remain hidden behind across-day median curves; selecting/fitting a day shows that day's intervals.
+- **Sleep layout:** **Sleep: Underneath / Overlay** switches between the existing aligned signal rows and overlays on the stage graph. Metric selection stays unchanged. Overlay axes reuse Custom Graph's compact colored axis lanes; the two respiration signals share their unit scale and both names appear on it. Sleep stages remain visible with reduced opacity beneath the signals, with the stage legend below. Single-day, multiple-day and median modes use the same mechanism.
+- **Refresh all data:** performs one explicit read of each configured source using From/Through and current connection inputs. It refreshes Nightscout records and rereads Garmin databases/Sleep/FIT files; it is not a graph-only redraw. Editing inputs or changing layers does not fetch data. Sources can still be refreshed separately. A failure in one source is shown without preventing the other source from refreshing. Available selected display dates are retained.
+- **Saved configurations:** per-signal filtering, smoothing strength, lower limits, Sleep layout/selected metrics and glucose Activity shading all round-trip with the existing configuration save/load controls. Credentials and records are not exported.
+
+
+## Health-18: recovered activity regions and cumulative-step variability
+
+Copy **all update files**, including `graph_component/` and the JavaScript files, into your existing project. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart, check **Build: Health-18**, then **reload Garmin data**. Select the parent Garmin folder containing `DBs` and `FitFiles` so activity FIT sessions are available. No new dependencies.
+
+- **Shared activity shading:** each recorded activity supplies one faint, labeled region at the same start/end time on every Garmin panel and Garmin custom/overlay graph. Recorded sport/sub-sport supplies the type; unknown types stay explicitly unknown. Repeated types have separate labels, for example **Running 1** and **Running 2**, with the same color. Each activity remains separately selectable.
+- **Interval recovery:** FIT sessions with missing/invalid end timestamps now use recorded elapsed duration. Valid timestamps retain priority. GarminDB summaries similarly use elapsed duration, then the last sample explicitly linked by activity ID when no valid duration/end exists. That final fallback is an observed bound, not a guaranteed exact workout finish. Matching FIT sessions replace DB parent summaries without removing unrelated overlapping activities. No episodes are inferred from heart rate, steps or pace.
+- **Zoom controls:** the graph toolbar shows the recorded activity selector, **Fit time axis to activity**, and **Full day**, including in expanded view. Fit applies the selected interval plus five minutes of padding to all linked time graphs. If no valid intervals are available, the controls remain visible but disabled with an explanation; the Garmin source inventory reports the interval count. Across-day medians have no actual-activity shading; fitting an activity first opens its recorded day.
+- **Cumulative steps 25–75% band:** available with Cumulative steps in both Multiple days and Median + band. The band uses quartiles of the independently accumulated per-day curves, with stepped edges. Average/Median changes the centerline, not the quartiles. At least two observed days must contribute to a band; no pre-recording zeros or future-day totals are invented. Held totals remain observed counts, not proof of zero steps during gaps.
+
+The missing-region cause cannot be confirmed for an individual private data set without inspecting its activity metadata. The importer fixes above are covered by synthetic GarminDB/FIT regressions, including the repeated-parent-timestamp case.
+
+## Health-17: activity focus, grouped sleep and consistent data layers
+
+Copy **all update files**, including `graph_component/` and the JavaScript files, into the existing project. Keep `data/`, `examples/`, `graph_configurations/` and `.venv/`. Restart and check **Build: Health-17**. No dependency changes from Health-16.
+
+### Activity and workout graphs
+
+- Workout axes follow the **visible** samples, with a 6% margin (a small nonzero margin for constant values). They rescale when you zoom, change dates or switch speed/pace. Shared-axis settings still take priority.
+- The old **Activities** graph was a constant “Exercise” strip, not an activity measurement. It has been removed from standard/custom selection. Recorded DB/FIT activity intervals now supply the same faint, labelled backgrounds to all Garmin panels and Garmin overlays/custom graphs. No activity is inferred from heart rate or steps.
+- Choose a recorded activity beside **Fit time axis to activity** in the graph toolbar. The button sets every linked time axis to that interval plus five minutes on either side. **Full day** restores 00:00–24:00. These controls work in expanded view. Selecting an activity from a median/multiple-day view first opens its recorded day. Activities crossing midnight have one selectable part per calendar day.
+- Actual activity intervals are not shaded behind across-day median curves. Multiple-day views show each selected day's recorded intervals at their time of day.
+
+### One Sleep layer
+
+Sleep stages remain the main visualization, with a larger stage ribbon and an always-visible key below the graph. **Sleep overlays** enables Movement, Restless moments, Respiration, Resting heart rate, Pulse Ox, Sleep respiration and Overnight HRV in aligned rows inside this same graph. All start off for a clean stage view; unavailable signals are disabled. The same controls work in daily, multi-day and median views.
+
+- **Respiration:** monitoring respiration samples inside recorded sleep sessions.
+- **Sleep respiration:** Sleep JSON respiration where present, otherwise the existing monitoring-derived sleep values. These two options can contain the same observations.
+- **Resting heart rate:** the recorded **daily reference**, drawn only over the associated sleep session and explicitly labelled. It is not an overnight heart-rate curve.
+- **Pulse Ox / Overnight HRV:** actual timestamped samples within known sleep intervals. Daily-only summary values remain in the overview; they are not expanded into artificial curves.
+- Movement intervals are weighted by their duration for median bins. Restless moment values use bars, with recorded values summed within each bin. Missing bins are not asserted to contain zero restless moments.
+- Garmin breathing variations remain an available nightly category beneath Sleep, not an invented continuous signal.
+
+### Stress, aggregation and gaps
+
+Stress bars are slightly wider and more defined. **Line** keeps the colored line option; **Low-pass** always draws a line. The smoothing slider sets the exponential time constant from **1 to 30 minutes**, default 5. Higher values smooth more. Gaps over five minutes still reset it. In a median view the filtered line is the display-filtered median curve; the shaded band remains the raw 25–75% spread.
+
+**Bars: Average / Median** controls Garmin aggregate bars and cumulative steps. Steps in both Multiple days and Median + band default to Average. Each day's observed cumulative total is calculated first, held between observations, and only then averaged or median-aggregated by five-minute bin. Missing pre-observation periods and future bins are excluded. Flat held portions indicate the last known total, not proof of no steps. Sleep stage percentages and other continuous median curves retain their previous aggregation.
+
+HRV and other Garmin variability bands now use separate polygons for contiguous populated bins, so they cannot connect across missing daytime data. The screenshot's **`Â·`** (“A_hat”) was a UTF-8/Windows decoding error in JavaScript labels, not a data field. All JavaScript sources are now read explicitly as UTF-8.
+
+### Layers and saved configurations
+
+The sidebar has separate **Diabetes**, **Garmin** and **Custom** selectors, followed by named saved configurations. The standard graph order is:
+
+- Diabetes: Glucose, COB + Carbs, IOB + Boluses, Temporary Basal, Temporary Targets, Variable Sensitivity.
+- Garmin: Steps, Heart Rate, Workout, Stress, Sleep, Respiration outside sleep.
+
+HRV and Pulse Ox are inside Sleep; raw fields remain available in custom graphs. **Nightscout Targets** is renamed **Temporary Targets**. Panel reordering still works. Existing saved configurations migrate renamed/grouped layers and old panel identities; old HRV/SpO2 selections activate the corresponding Sleep overlays. New saves also retain sleep selections, aggregation, smoothing enabled/disabled and filter strength. Dates and activity zoom are navigational state, not frozen into a named configuration.
+
+---
+
+The following sections are historical release notes; the newest release takes precedence where behavior differs.
+
+## Health-16: named views, raw Garmin exports and detailed activity timelines
+
+Extract **all files and the `graph_component/` folder** into the existing project. Keep `data/`, `examples/` and `graph_configurations/`. Restart and check **Build: Health-16**.
+
+This release adds `fitdecode` for local FIT decoding. The updated `start.bat` / `start.sh` installs it if missing. If you launch manually, first run `python -m pip install -r requirements.txt` using the same Python environment as Streamlit.
+
+### Save and reload graph configurations
+
+Enter a name next to **Save configuration** in the graph toolbar, then save. The app writes a JSON file directly into the project's **graph_configurations/** folder. Saved names appear as buttons immediately below **Data layers**; clicking one applies it. Reusing a name (case-insensitive) updates that view. No manual download/import is required. These files are excluded from git by default.
+
+Saved settings include layers, mode, custom fields, graph order, overlays, scales and display toggles. Credentials, source paths, dates and health records are not stored. As before, custom profile fields refer to the currently selected references/draft, not a frozen copy of a profile. Missing/unavailable fields are omitted.
+
+### Garmin connection and source details
+
+Select the **HealthData** folder containing **DBs**, **Sleep** and **FitFiles**. An existing path directly to **DBs** also resolves to its parent for the exports. Measurement units are fixed to **Metric**, as requested. The source files are read-only and refresh remains manual.
+
+- `DBs/`: existing health timelines and activity summaries.
+- `Sleep/sleep_YYYY-MM-DD.json`: recorded stages (including Awake), movement intervals, restless moments, respiration, awake/restless counts and available nightly breathing/restlessness labels. GMT fields are interpreted as UTC, independent of the DB's local timezone.
+- `FitFiles/Activities/**/*.fit`: activity sessions and native workout records. FIT speed is converted from m/s to km/h; power is W and altitude is metres. Explicit enhanced speed/altitude fields take priority over legacy or decoder-synthesized values. Native UTC timestamps, recorded zeros and timer boundaries are retained. Corrupt files are reported while valid DB data remains available.
+- Matching raw exports take priority over the corresponding DB time window for each populated field. Missing raw fields do not erase usable DB measurements. Raw files are not uploaded or modified.
+
+The source inventory shows how many Sleep JSON nights and activity FIT files contributed. Missing fields stay absent. This importer reads **activity** FIT exports; it does not parse all monitoring FIT files. Monitoring data continues to come from GarminDB.
+
+### Graph changes
+
+- **Stress:** bars or a colored line; the optional five-minute low-pass always renders a line. Blue is 0–25, orange 26–75 and red 76–100. The histogram is removed. Filtering is display-only and resets after gaps longer than five minutes.
+- **Cumulative steps:** the last observed total is held horizontally until another observation, and through the loaded portion of the day. A flat held segment during a data gap does **not** prove that no steps occurred. Hourly totals are unchanged. Median cumulative curves use each day's held observed totals.
+- **Sleep:** thicker stage bars and a persistent colored stage key below the graph. Movement, restless moments and respiration appear as aligned rows inside the same sleep graph when available. Awake remains its original sleep-stage color. Additional nightly labels appear below the graph on the dates the sleep session overlaps.
+- **Breathing variations:** the verified source field is `dailySleepDTO.breathingDisruptionSeverity`, a nightly category. The app displays that original category as a label; it does not invent a breathing-variation time series or infer one from respiration rate. If the watch/export omits it, no category is assumed.
+- **Activities:** stronger, sport-colored shading on all Garmin day-view panels, Garmin profile overlays and custom graphs containing Garmin fields. Date navigation filters shading to the selected day. Actual episodes are not shaded onto an across-day median as if they happened every day.
+- **Workout detail:** day views preserve native samples and sub-minute timestamps, replacing the earlier one-/five-minute binning. Timer boundaries and gaps over 30 seconds break lines. Days above 12,000 samples retain temporal bucket minima/maxima to bound payload size. Across-day median views intentionally keep five-minute statistical bins. Higher resolution exposes recorded detail; it cannot improve sensor accuracy.
+
+Verified against GarminDB's importer and schema, go-garmin's `sleep_svc.go`, garth's public sleep fixtures, and fitdecode's documented field API. Tests use synthetic Sleep JSON and CRC-valid FIT records, configuration file round trips, Streamlit callbacks, and JavaScript graph/bridge lifecycle checks. The user's own export files and desktop-browser appearance have not been validated.
+
+## Health-15: shared dates, saved views and Garmin display controls
+
+Historical release notes below describe earlier behavior. For saved configurations, Garmin sources and display controls, the Health-16 instructions above take precedence.
+
+Extract this update into the existing app folder and restart. Check **Build: Health-15**. Keep `data/` and `examples/`. All Python and JavaScript files in the archive are required. No new dependency is needed.
+
+### Dates and configurations
+
+- A single **Load date range** now appears before Nightscout credentials and the GarminDB folder. Each source's manual refresh reads that range. Changing dates alone does not fetch data.
+- The calendar includes dates covered by either loaded source. Garmin is no longer clipped to the Nightscout range. Outside Nightscout's loaded range, treatment totals/histograms and glucose coverage remain unavailable, not zero.
+- Locally navigated dates, graph options, custom selections and panel order survive adding/removing data layers. An explicit sidebar calendar selection or view-mode change takes precedence. This uses browser session storage; if browser storage is disabled, local state cannot survive an iframe rebuild.
+- **Save configuration** in the graph toolbar downloads `Profile-Studio-view.json` in one click. **Data configuration → Load configuration → Apply configuration** reloads it. Included: selected layers, view mode, order, custom fields, overlays, scale toggles, SMB/target toggles, hourly statistics, and Garmin display options.
+- Configurations exclude credentials, folder paths, dates, health records and saved profiles. Profile fields in custom graphs refer to the current draft/references when reopened; the file does not switch reference profiles. Unavailable fields are omitted.
+
+### Garmin display
+
+- **Heart rate:** starts at 35 bpm, or lower if an actual measurement requires it. Running, cycling, walking and other recorded activities shade HR and steps with consistent activity colors. Activity names form a key below each graph. Actual exercise intervals are not drawn behind across-day median curves.
+- **Stress:** blue at 0–25, orange at 26–75, red at 76–100. The graph offers **Low-pass · 5 min** and **Histogram**. Low-pass is an optional, first-order exponential display filter: `alpha = 1 - exp(-dt/5 minutes)`. It resets after missing samples/gaps longer than five minutes and never fills them. This is not Garmin's internal stress algorithm. Histogram bins count observed display samples (one- or five-minute bins); in median view, they count the median bins. It is not a full-day time budget.
+- **Steps:** switch between observed hourly totals and a cumulative line. The latter sums the same observed increments, resets each day, and leaves long gaps blank. Missing increments are excluded, so it can be lower than Garmin's complete daily total. In median view, the cumulative line is the median of each day's cumulative observed counts at recorded five-minute bins.
+- **Sleep:** a single stage-colored bar per date with a stage legend. Multiple dates use separate rows. Gaps remain unknown. Median mode retains observed-stage percentage bars. **Sleep respiration** is shown in an aligned panel when actual respiration samples fall inside recorded sleep-stage/session intervals; samples outside known intervals are excluded. Daily average respiration remains in the overview.
+- **Workout:** one layer adds activity intervals plus aligned speed/pace, power, cadence, elevation and activity-HR panels. Each panel can be reordered. Choose Metric or Statute when loading GarminDB; the speed toggle then switches **km/h ↔ min/km**, converting mph if needed. Zero-speed samples have no finite pace. Missing power is explicitly labelled. Workout respiration/temperature and individual workout fields remain available in custom graphs and overlays.
+- Workout HR and all-day HR are different source streams: `activity_records.hr` versus `monitoring_hr.heart_rate`. The physiological quantity is the same, but sampling and sensor source may differ, so they are retained separately.
+- **SMB:** successive triangles alternate above/below the zero baseline, offset in pixels, while marker area stays proportional to dose. The timestamp and actual dose remain unchanged. Direction/offset does not mean positive versus negative insulin. Dense events can still overlap; zoom preserves their exact times.
+
+### Extra source data and limits
+
+This connection reads DBs only. Standard GarminDB's `sleep`/`sleep_events` schema contains sleep stages, awake duration and summary values, but no breathing-variation or restlessness timeline. Awake stages are not substituted for restlessness, and variation in respiration rate is not relabelled as Garmin's breathing-variation score. Standard `activity_records` also lacks power; a populated `power` column is supported if present in a customized DB.
+
+GarminDB retains original **Sleep JSON** and **FitFiles** exports. These are useful for fields not retained in the database, device-specific measurements, and rebuilding databases. Exactly which extra sleep fields are present depends on the watch/export. A separate importer requires a representative Sleep JSON or FIT sample/schema; it is not enabled by this update. No folder is scanned beyond the selected DBs folder.
+
+References: [GarminDB](https://github.com/tcgoetz/GarminDB), its `garmindb/garmindb/garmin_db.py` and `activities_db.py` schemas and `import_monitoring.py` importer; [Garmin stress scale](https://support.garmin.com/en-IE/?faq=WT9BmhjacO4ZpxbCc0EKn9).
+
+Validation uses synthetic databases, Streamlit application tests, JavaScript DOM/Plotly lifecycle mocks and Plotly schema validation. The user's actual databases and desktop-browser appearance have not been validated.
+
+## Health-14: GarminDB, health-data workspace and aligned SMB markers
+
+Extract the update into your existing app folder, replace the app files and restart. Check **Build: Health-14**. Keep your existing `data/` and `examples/` folders. This update adds no dependencies and does not change any saved profile or source database.
+
+### Use GarminDB
+
+1. Open **GarminDB data** in the sidebar.
+2. Enter the folder containing `garmin.db`, `garmin_monitoring.db` and/or `garmin_activities.db` (typically `C:\Users\your-name\HealthData\DBs`). Files are read on the computer running Streamlit.
+3. Set the timezone used by GarminDB's local timestamps and its measurement system (Metric or Statute). If unknown, units remain labelled as database units; values are never silently converted.
+4. Select up to 31 days and press **Load / refresh Garmin data**. Refresh after GarminDB has finished updating. The source connection is read-only; it does not log in to Garmin or run GarminDB downloads.
+5. Choose populated **Garmin · …** layers or **Custom graph**. Fields are also available on profile overlays and in expanded view. Use `GARMINDB_FOLDER` as an environment variable for a persistent default folder; otherwise the entered path lasts for the browser session.
+
+Supported timelines: heart rate, stress, steps, respiration, SpO₂, HRV samples, sleep stages, recorded activities, and available workout heart rate, respiration, cadence, speed, altitude and temperature. Daily values from `daily_summary`, `sleep`, `resting_hr`, `weight` and `hrv`, including Body Battery summaries, appear in the graph's expandable overview. Activity summary details appear there too. Only populated supported columns are exposed; newer or plugin-specific tables are not automatically interpreted as health measurements. No personal database upload is required.
+
+- **Sleep:** categorical intervals at their recorded times, split at midnight. Missing periods stay blank; they are never called awake. A session with start/end but no stages is labelled “stages unavailable.” A partly recorded session's gaps remain gaps. In median mode, five-minute stacked bars show stage percentages among observed nights, excluding missing coverage. Unknown-stage sessions do not enter those percentages.
+- **Steps:** hourly totals from successive cumulative counters per activity type/day. First observations, counter resets and intervals over 20 minutes are not assigned to an hour. These partial observed totals can be lower than the complete Garmin daily total, which remains in the overview. No missing hour is filled with zero.
+- **Other numeric timelines:** daily traces preserve gaps; multiple-day medians and 25–75% bands use one within-bin median per day. Display samples use one-minute bins, or five-minute bins when more than seven days are loaded, to limit browser payload size.
+- **Activities:** recorded exercise intervals, even in median mode. They are not averaged into a fictitious workout.
+- **Time:** ambiguous/nonexistent naive local timestamps during DST are omitted with a warning. Stored timestamps without original offsets cannot reliably resolve travel or repeated hours. Check a known workout against Nightscout before interpreting alignment.
+- **Calendar:** G marks dates with Garmin records. Hover explains which sources cover a date. With both sources loaded, the shared viewer includes the union of their loaded ranges. Garmin-only dates require no Nightscout connection.
+
+### View health data
+
+Choose **Workspace → View health data** to browse recorded data without profile overview, reference selectors, draft controls or a pinned profile graph. Display timezone and glucose units are independent controls. The graph toolbar retains the calendar, previous/next day, expanded view, custom graphs and panel reordering. Daily summaries remain available. Switching workspaces preserves the draft.
+
+### SMB display
+
+SMB triangles now share the zero baseline: their **area is proportional to dose** with a consistent scale across dates. Actual doses stay in hover and all source data/statistics. A compact size key illustrates 0.05, 0.2 and 0.5 U. Markers are not capped into indistinguishable large sizes. User boluses remain rectangles with numeric labels; hourly bolus totals and the Exclude SMB controls are unchanged. Closely spaced SMBs may still overlap—zoom in to distinguish exact event times. This drawing convention applies in normal, expanded, overlay and custom graphs.
+
+### Validation and limits
+
+Verified using synthetic SQLite fixtures based on GarminDB's public schema, Streamlit app tests, Plotly schema validation, and JavaScript DOM/Plotly lifecycle tests. Your personal database and an actual desktop browser rendering have not been inspected here. The importer does not modify AAPS, configure cloud backups or change insulin profiles. All data is descriptive recorded context.
+
+
 ## Nightscout-13: setting/source colors and compact custom axes
 
 Replace the app files, restart and check **Build: Nightscout-13**. Keep your `data/` and `examples/` folders. No new dependency is needed.
@@ -322,7 +594,7 @@ Excel does not include arbitrary additional overview fields, profile links or JS
 
 ## Updating an existing installation
 
-Close the app, then copy **all top-level `.py` files** and `README.md` from this package into your existing app folder. This includes `app.py`, `profiles.py`, `appearance.py`, `editor_history.py`, **`nightscout.py`**, **`nightscout_charts.py`** and **`nightscout_ui.py`**, **`graph_view.py`**, **`comparison_tables.py`**, **`nightscout_stats.py`**, and **`chart_cache.py`**. If you have not installed the labelled Excel import update yet, also copy `examples/profile-import.xlsx`. Keep your existing `data/profiles/` folder and `.venv` environment. No data migration or new dependencies are needed. Restart with `start.bat` or `.venv\Scripts\python.exe -m streamlit run app.py`.
+Close the app, then copy **all files in this update**, including the `.js` files, `graph_component/` folder, requirements and launchers, into your existing app folder. Keep your existing `data/`, `examples/`, `graph_configurations/` and `.venv` folders. No profile migration is needed. Health-16 adds `fitdecode`; `start.bat` installs it if missing. If launching manually, first run `.venv\Scripts\python.exe -m pip install -r requirements.txt`, then `.venv\Scripts\python.exe -m streamlit run app.py`.
 
 ## Source and tests
 

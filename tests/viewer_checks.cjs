@@ -10,7 +10,8 @@ async function harness(hidden=false) {
   constructor(id=''){this.id=id;this.style={};this.children=[];this.handlers={};this.textContent='';this.value='';this.disabled=false;}
   get clientWidth(){return width;} get clientHeight(){return 720;}
   getBoundingClientRect(){return {width,height:720};}
-  appendChild(x){this.children=this.children.filter(v=>v!==x);this.children.push(x);return x;} replaceChildren(){this.children=[];this.textContent='';}
+  appendChild(x){if(x.parentElement)x.parentElement.children=x.parentElement.children.filter(v=>v!==x);this.children=this.children.filter(v=>v!==x);this.children.push(x);x.parentElement=this;return x;} replaceChildren(){this.children=[];this.textContent='';}
+  remove(){if(this.parentElement)this.parentElement.children=this.parentElement.children.filter(c=>c!==this);}
   setAttribute(k,v){this[k]=v;}
   on(k,f){this.handlers[k]=f;}addEventListener(k,f){this.handlers[k]=f;}
  }
@@ -31,7 +32,7 @@ async function harness(hidden=false) {
  const context={document,Number,String,Promise,Set,Math,JSON,requestAnimationFrame:f=>setImmediate(f),
   ResizeObserver:class{constructor(callback){observers.push(callback);}observe(){}},
   IntersectionObserver:class{constructor(callback){intersections.push(callback);}observe(){setImmediate(()=>intersections.forEach(f=>f([{isIntersecting:!hidden}])));}},
-  Plotly:{newPlot:(div,data,layout)=>render(div,data,layout,'new'),react:(div,data,layout)=>render(div,data,layout,'react'),
+  Plotly:{purge:div=>{plots=plots.filter(p=>p!==div);},newPlot:(div,data,layout)=>render(div,data,layout,'new'),react:(div,data,layout)=>render(div,data,layout,'react'),
    relayout:async(div,patch)=>{
     if(active.has(div))races++;active.add(div);await tick();
     Object.assign(div.layout,patch);if(patch['xaxis.range'])div._fullLayout.xaxis.range=patch['xaxis.range'];
@@ -41,16 +42,16 @@ async function harness(hidden=false) {
  async function settle(){for(let i=0;i<8;i++)await tick();await vm.runInContext('jobs',context);}
  await tick();assert.equal(plots.length,0,'Do not draw before fonts are ready');finishFonts();await settle();
  if(hidden){assert.equal(plots.length,0,'Do not draw hidden tabs even when iframe dimensions are nonzero');width=1000;observers.forEach(f=>f());await settle();assert.equal(plots.length,0);intersections.forEach(f=>f([{isIntersecting:true}]));await settle();}
- assert.equal(plots.length,10);assert(plots.every(p=>p.layout.width===1000));
+ assert.equal(plots.length,10);assert(plots.every((p,i)=>p.layout.width===(i===0?1000:934)));
  assert.equal(ids['overlay-select'].children.length,7);
- assert.equal(ids['overlay-select'].children[0]['aria-pressed'],'true');
+ assert.equal(ids['overlay-select'].value,'None');
  assert(ids['profile-target-note'].hidden);
  await ids.expand.handlers.click();await settle();assert(document.fullscreenElement);
  plots[0]._fullLayout.xaxis.range=[360,720];
- async function overlay(value) {await ids['overlay-select'].children.find(b=>b.value===value).handlers.click();await settle();assert(document.fullscreenElement);assert.deepEqual(plots[0]._fullLayout.xaxis.range,[360,720]);}
+ async function overlay(value) {ids['overlay-select'].value=value;await ids['overlay-select'].handlers.change();await settle();assert(document.fullscreenElement);assert.deepEqual(plots[0]._fullLayout.xaxis.range,[360,720]);}
  const custom=plots.find(p=>p.layout.meta?.kind==='custom');
- const fieldButtons=vm.runInContext('customButtons',context);
- const customScale=vm.runInContext('customScaleButton',context);
+ const fieldButtons=vm.runInContext('customUIs.values().next().value.buttons',context);
+ const customScale=vm.runInContext('customUIs.values().next().value.scale',context);
  const pick=async id=>{await fieldButtons.find(b=>b.value===id).handlers.click();await settle();assert(document.fullscreenElement);};
  const icChoice=fieldButtons.find(b=>b.value==='profile:ic:0');
  assert.equal(icChoice.children[0].style.color,'#ff9800');
@@ -109,23 +110,23 @@ async function harness(hidden=false) {
    assert.equal(bars.y[h],median);
  }
  await smbButton.handlers.click();await settle();assert.equal(JSON.stringify(bolus.data),allBolus);
- assert(plots.every(p=>p.layout.height>=285));
+ assert.equal(plots[0].layout.height,250);assert(plots.slice(1).every(p=>p.layout.height>=285));
  assert(plots.every(p=>p.layout.shapes.some(s=>s.name==='Profile change' && s.x0===600)));
  const variablePanel=plots.find(p=>p.layout.meta?.dataset==='variable_sens');
  assert.equal(variablePanel.layout.yaxis.title.text,'mmol/L/U');
  const beforeOrder=vm.runInContext('panelOrder.slice()',context);
- await vm.runInContext('moveButtons.find(b=>b.index===2 && b.direction===-1).button.handlers.click()',context);await settle();
+ await vm.runInContext('moveButtons.find(b=>b.panel.graphIndex===2 && b.direction===-1).button.handlers.click()',context);await settle();
  const changedOrder=vm.runInContext('panelOrder.slice()',context);
  assert.equal(changedOrder[0],2);assert.equal(changedOrder[1],1);
- assert.equal(ids.panels.children.length,plots.length-1);
- await overlay('Variable sensitivity');assert.equal(plots[0].layout.yaxis2.title.text,'mmol/L/U');
+ assert.equal(ids.panels.children.filter(p=>Number.isInteger(p.graphIndex)).length,plots.length-1);
+ await overlay('Variable Sensitivity');assert.equal(plots[0].layout.yaxis2.title.text,'mmol/L/U');
  const scale=ids['same-scale'];await scale.handlers.click();await settle();
  assert.deepEqual(plots[0].layout.yaxis.range,plots[0].layout.yaxis2.range);
- await overlay('IOB + boluses');assert.deepEqual(plots[0].layout.yaxis.range,plots[0].layout.yaxis2.range);
+ await overlay('IOB + Boluses');assert.deepEqual(plots[0].layout.yaxis.range,plots[0].layout.yaxis2.range);
  await scale.handlers.click();await settle();assert(plots[0].layout.yaxis.autorange);
- await overlay('Variable sensitivity');assert.equal(plots[0].layout.yaxis2.title.text,'mmol/L/U');
+ await overlay('Variable Sensitivity');assert.equal(plots[0].layout.yaxis2.title.text,'mmol/L/U');
  assert.deepEqual(vm.runInContext('panelOrder.slice()',context),changedOrder);
- await overlay('Nightscout targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
+ await overlay('Temporary Targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
  const lower=plots.slice(1).map(p=>JSON.stringify(p.data));
  await overlay('Glucose');assert(plots[0].data.some(t=>t.meta?.kind==='median'),'Initial median mode is preserved');
  assert.equal(plots[0].layout.yaxis2.range[1],20);
@@ -134,7 +135,7 @@ async function harness(hidden=false) {
  await ids['show-targets'].handlers.click();await settle();assert(ids['profile-target-note'].hidden);assert(!plots[0].data.some(t=>t.meta?.kind==='target'));
  await overlay('None');await overlay('Glucose');assert(!plots[0].data.some(t=>t.meta?.kind==='target'));
  await ids['show-targets'].handlers.click();await settle();assert(!ids['profile-target-note'].hidden);
- await overlay('IOB + boluses');assert(plots[0].data.some(t=>t.meta?.kind==='median' && t.meta.dataset==='iob'));assert(!plots[0].data.some(t=>t.meta?.kind==='bolus'));
+ await overlay('IOB + Boluses');assert(plots[0].data.some(t=>t.meta?.kind==='median' && t.meta.dataset==='iob'));assert(!plots[0].data.some(t=>t.meta?.kind==='bolus'));
  assert.deepEqual(plots.slice(1).map(p=>JSON.stringify(p.data)),lower,'Changing overlay leaves other panels unchanged');
  await smbButton.handlers.click();await settle();
  await ids['next-day'].handlers.click();await settle();
@@ -148,14 +149,14 @@ async function harness(hidden=false) {
  assert(ids['summary-title'].textContent.includes('In range 100%'));
  const hourly=plots.find(p=>p.layout.meta?.dataset==='carbs' && p.layout.meta?.kind==='hourly');
  assert(hourly);assert.equal(hourly.data[0].y[0],'2026-09-16');assert.equal(hourly.data[0].z[0][5],30);assert.equal(hourly.data[1].y[5],30);
- await overlay('COB + carbs');assert(plots[0].layout.yaxis2.autorangeoptions.include>=36);assert(plots[0].data.find(t=>t.meta?.kind==='carbs').cliponaxis===false);assert(plots[0].data.some(t=>t.meta?.kind==='cob'));assert(plots[0].data.some(t=>t.meta?.kind==='carbs'));
+ await overlay('COB + Carbs');assert(plots[0].layout.yaxis2.autorangeoptions.include>=36);assert(plots[0].data.find(t=>t.meta?.kind==='carbs').cliponaxis===false);assert(plots[0].data.some(t=>t.meta?.kind==='cob'));assert(plots[0].data.some(t=>t.meta?.kind==='carbs'));
  assert(plots[0].data.filter(t=>t.meta?.date).every(t=>t.meta.date==='2026-09-16'));
  await ids['next-day'].handlers.click();await settle();assert.equal(ids['day-label'].textContent,'2026-09-17');
  assert.deepEqual(vm.runInContext('panelOrder.slice()',context),changedOrder);
  assert(!plots[0].layout.yaxis2.autorangeoptions,'Clear padding from the previous day when no labeled events remain');
  await overlay('Glucose');assert(plots[0].data.some(t=>t.meta?.kind==='glucose'));assert(!plots[0].data.some(t=>t.meta?.kind==='median'));
  assert(plots[0].data.find(t=>t.meta?.kind==='glucose').showlegend,'Rebuild legend after filtering to a later day');
- await overlay('Nightscout targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
+ await overlay('Temporary Targets');assert.deepEqual(plots[0].layout.yaxis2.range,[0,20]);
  await overlay('None');assert(ids['profile-target-note'].hidden);assert(!plots[0].layout.yaxis2);assert(plots[0].data.every(t=>!t.meta?.date));
  assert.equal(plots[0].layout.yaxis.rangemode,'normal');
  assert(plots.every(p=>p.layout.title.text.includes('2026-09-17')));
@@ -181,7 +182,7 @@ async function harness(hidden=false) {
  assert(plots.every(p=>p.layout.shapes.some(s=>s.name==='Profile change' && s.x0===800)));
  assert(plots.every(p=>!p.layout.shapes.some(s=>s.name==='Profile change' && s.x0===600)));
  await overlay('Glucose');assert(plots[0].layout.title.text.startsWith('ISF ·'));
- await overlay('Variable sensitivity');
+ await overlay('Variable Sensitivity');
  await ids['previous-day'].handlers.click();await settle();
  assert.equal(plots[0].layout.yaxis2.title.text,'mmol/L/U');
  assert(plots[0].data.some(t=>t.meta?.kind==='variable_sens' && t.y.includes(5)));
@@ -210,8 +211,8 @@ async function harness(hidden=false) {
  const allCustomFields=custom.data.filter(t=>t.meta?.kind==='profile');assert(allCustomFields.length>=4);
  // Hide/show and concurrent resize/change requests must not overlap Plotly calls.
  width=0;observers.forEach(f=>f());await settle();
- width=780;const change=ids['overlay-select'].children.find(b=>b.value==='IOB + boluses').handlers.click();observers.forEach(f=>f());
- await change;await settle();assert.equal(races,0);assert(plots.every(p=>p.layout.width===780));
+ width=780;ids['overlay-select'].value='IOB + Boluses';const change=ids['overlay-select'].handlers.change();observers.forEach(f=>f());
+ await change;await settle();assert.equal(races,0);assert(plots.every((p,i)=>p.layout.width===(i===0?780:714)));
  const boxes=[{left:10,right:30,top:10,bottom:20},{left:15,right:35,top:10,bottom:20},{left:80,right:100,top:10,bottom:20}];
  const labels=boxes.map(box=>({style:{},getBoundingClientRect:()=>({...box,width:20,height:10})}));context.labelDiv={querySelectorAll:()=>labels};
  vm.runInContext('tidyLabels(labelDiv)',context);assert.equal(labels[1].style.visibility,'hidden');

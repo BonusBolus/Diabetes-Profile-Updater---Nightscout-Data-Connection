@@ -167,101 +167,126 @@ if "draft" in st.session_state and "last_edit" not in st.session_state:
     reset_history(st.session_state)
 
 # Retain hidden reference selectors when changing workspace modes.
-for state_key in ('compare_second','second_reference_category','second_reference_id'):
+for state_key in ('reference_category','reference_id','compare_second','second_reference_category','second_reference_id'):
     if state_key in st.session_state:
         st.session_state[state_key] = st.session_state[state_key]
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Nightscout-13")
+    st.caption("Build: Health-26")
     st.caption("Create · compare · keep your history")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
         st.session_state.page = "Editor"
         st.session_state.show_history = False
-    page = st.radio("Workspace", ["View", "Compare", "Editor"], index=2,
-        format_func=lambda item: {"View":"View one profile", "Compare":"Compare two profiles", "Editor":"Edit draft"}[item], key="page")
-    show_history = st.checkbox("Browse history / export", key="show_history")
+    page = st.radio("Workspace", ["View", "Compare", "Editor", "Data"], index=2,
+        format_func=lambda item: {"View":"View one profile", "Compare":"Compare two profiles", "Editor":"Edit draft", "Data":"View health data"}[item], key="page")
+    show_history = st.checkbox("Browse history / export", key="show_history") if page != "Data" else False
     if show_history:
         page = "History"
     st.divider()
-    st.subheader("Selected profile" if page == "View" else "Profile 1" if page == "Compare" else "Reference 1")
     reference = None
     second_reference = None
-    if profiles:
-        category = st.selectbox("Reference category", categories, key="reference_category")
-        candidates = sorted([p for p in profiles if p["category"]==category], key=lambda p:p["version"], reverse=True)
-        if st.session_state.get("reference_id") not in [p["id"] for p in candidates]:
-            st.session_state.reference_id = candidates[0]["id"]
-        reference_id = st.selectbox("Reference version", [p["id"] for p in candidates],
-            format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="reference_id")
-        reference = by_id[reference_id]
-        st.markdown(f'<span style="color:{source_colors["ref1"]};font-weight:600">Ref 1 · {escape(reference["name"])}</span>',unsafe_allow_html=True)
-        linked_id = reference.get("linked_profile_id")
-        if linked_id in by_id and linked_id != reference_id:
-            st.caption("Corresponding profile: " + profile_label(by_id[linked_id]))
-            st.button("Compare linked profile", on_click=compare_linked, args=(by_id[linked_id],))
-        elif linked_id:
-            st.caption("The corresponding profile is unavailable in this history.")
-        compare_second = (page == "Compare") or (st.checkbox("Compare with a second profile", key="compare_second", disabled=len(profiles)<2) if page == "Editor" else False)
-        if compare_second and len(profiles) >= 2:
-            st.subheader("Reference 2")
-            other_profiles = [p for p in profiles if p["id"] != reference_id]
-            other_categories = sorted({p["category"] for p in other_profiles}, key=str.casefold)
-            if st.session_state.get("second_reference_category") not in other_categories:
-                st.session_state.second_reference_category = next(
-                    (c for c in other_categories if c.casefold()=="standard"), other_categories[0])
-            second_category = st.selectbox("Second reference category", other_categories, key="second_reference_category")
-            second_candidates = sorted([p for p in other_profiles if p["category"]==second_category],
-                                       key=lambda p:p["version"], reverse=True)
-            if st.session_state.get("second_reference_id") not in [p["id"] for p in second_candidates]:
-                st.session_state.second_reference_id = second_candidates[0]["id"]
-            second_id = st.selectbox("Second reference version", [p["id"] for p in second_candidates],
-                format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="second_reference_id")
-            second_reference = by_id[second_id]
-            st.markdown(f'<span style="color:{source_colors["ref2"]};font-weight:600">Ref 2 · {escape(second_reference["name"])}</span>',unsafe_allow_html=True)
-        if page == "Editor":
-            st.caption("Changing references keeps your draft intact. Copying starts a new draft from Reference 1.")
-    else:
-        st.info("Import an Excel or JSON profile to begin.")
-    with st.expander("Create or load a draft", expanded=page == "Editor"):
-        draft_now = st.session_state.get("draft")
-        dirty = draft_now is not None and (fingerprint(draft_now) != st.session_state.get("initial") or st.session_state.get("invalid_edits",False))
-        replace_ok = not dirty
-        if dirty:
-            replace_ok = st.checkbox("Discard my unsaved draft when loading another profile", key=f"discard_{st.session_state.epoch}")
-        if reference and st.button("Copy reference to a new draft", disabled=not replace_ok, width="stretch"):
-            start_draft(reference, profiles)
-            st.session_state.open_editor = True
-            st.rerun()
-        if reference and st.button("Edit existing profile", disabled=not replace_ok, width="stretch"):
-            start_draft(reference, profiles, editing=True)
-            st.session_state.open_editor = True
-            st.rerun()
-        with st.expander("Import Excel or JSON"):
-            st.download_button("Download Excel template", (ROOT / "examples" / "profile-import.xlsx").read_bytes(),
-                               "Profile-Import.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            uploaded = st.file_uploader("Choose a profile", type=["xlsx", "json"], key="upload")
-            if uploaded:
-                try:
-                    content = uploaded.getvalue()
-                    is_excel = uploaded.name.lower().endswith(".xlsx")
-                    if is_excel:
-                        sheet = st.selectbox("Worksheet to import", excel_sheets(content), key="import_sheet")
-                    if st.button("Import selected worksheet" if is_excel else "Import JSON profile", disabled=not replace_ok):
-                        incoming = import_excel(content, sheet) if is_excel else validate_profile(json.loads(content))
-                        incoming.setdefault("source", {})["filename"] = uploaded.name
-                        start_draft(incoming, profiles, imported=True)
-                        st.session_state.open_editor = True
-                        st.session_state.notice = f"Imported {incoming['name']} as a draft. Review it, then save when ready."
-                        st.rerun()
-                except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile) as exc:
-                    st.error(str(exc))
-            st.caption("Import is manual, one worksheet at a time. Category comes from the file and can be edited in Overview. Nothing is saved until you click Save as new version.")
+    if page != "Data":
+        st.subheader("Selected profile" if page == "View" else "Profile 1" if page == "Compare" else "Reference 1")
+        if profiles:
+            category = st.selectbox("Reference category", categories, key="reference_category")
+            candidates = sorted([p for p in profiles if p["category"]==category], key=lambda p:p["version"], reverse=True)
+            if st.session_state.get("reference_id") not in [p["id"] for p in candidates]:
+                st.session_state.reference_id = candidates[0]["id"]
+            reference_id = st.selectbox("Reference version", [p["id"] for p in candidates],
+                format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="reference_id")
+            reference = by_id[reference_id]
+            st.markdown(f'<span style="color:{source_colors["ref1"]};font-weight:600">Ref 1 · {escape(reference["name"])}</span>',unsafe_allow_html=True)
+            linked_id = reference.get("linked_profile_id")
+            if linked_id in by_id and linked_id != reference_id:
+                st.caption("Corresponding profile: " + profile_label(by_id[linked_id]))
+                st.button("Compare linked profile", on_click=compare_linked, args=(by_id[linked_id],))
+            elif linked_id:
+                st.caption("The corresponding profile is unavailable in this history.")
+            compare_second = (page == "Compare") or (st.checkbox("Compare with a second profile", key="compare_second", disabled=len(profiles)<2) if page == "Editor" else False)
+            if compare_second and len(profiles) >= 2:
+                st.subheader("Reference 2")
+                other_profiles = [p for p in profiles if p["id"] != reference_id]
+                other_categories = sorted({p["category"] for p in other_profiles}, key=str.casefold)
+                if st.session_state.get("second_reference_category") not in other_categories:
+                    st.session_state.second_reference_category = next(
+                        (c for c in other_categories if c.casefold()=="standard"), other_categories[0])
+                second_category = st.selectbox("Second reference category", other_categories, key="second_reference_category")
+                second_candidates = sorted([p for p in other_profiles if p["category"]==second_category],
+                                           key=lambda p:p["version"], reverse=True)
+                if st.session_state.get("second_reference_id") not in [p["id"] for p in second_candidates]:
+                    st.session_state.second_reference_id = second_candidates[0]["id"]
+                second_id = st.selectbox("Second reference version", [p["id"] for p in second_candidates],
+                    format_func=lambda key:f"v{by_id[key]['version']} · {by_id[key]['name']}", key="second_reference_id")
+                second_reference = by_id[second_id]
+                st.markdown(f'<span style="color:{source_colors["ref2"]};font-weight:600">Ref 2 · {escape(second_reference["name"])}</span>',unsafe_allow_html=True)
+            if page == "Editor":
+                st.caption("Changing references keeps your draft intact. Copying starts a new draft from Reference 1.")
+        else:
+            st.info("Import an Excel or JSON profile to begin.")
+        with st.expander("Create or load a draft", expanded=page == "Editor"):
+            draft_now = st.session_state.get("draft")
+            dirty = draft_now is not None and (fingerprint(draft_now) != st.session_state.get("initial") or st.session_state.get("invalid_edits",False))
+            replace_ok = not dirty
+            if dirty:
+                replace_ok = st.checkbox("Discard my unsaved draft when loading another profile", key=f"discard_{st.session_state.epoch}")
+            if reference and st.button("Copy reference to a new draft", disabled=not replace_ok, width="stretch"):
+                start_draft(reference, profiles)
+                st.session_state.open_editor = True
+                st.rerun()
+            if reference and st.button("Edit existing profile", disabled=not replace_ok, width="stretch"):
+                start_draft(reference, profiles, editing=True)
+                st.session_state.open_editor = True
+                st.rerun()
+            with st.expander("Import Excel or JSON"):
+                st.download_button("Download Excel template", (ROOT / "examples" / "profile-import.xlsx").read_bytes(),
+                                   "Profile-Import.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                uploaded = st.file_uploader("Choose a profile", type=["xlsx", "json"], key="upload")
+                if uploaded:
+                    try:
+                        content = uploaded.getvalue()
+                        is_excel = uploaded.name.lower().endswith(".xlsx")
+                        if is_excel:
+                            sheet = st.selectbox("Worksheet to import", excel_sheets(content), key="import_sheet")
+                        if st.button("Import selected worksheet" if is_excel else "Import JSON profile", disabled=not replace_ok):
+                            incoming = import_excel(content, sheet) if is_excel else validate_profile(json.loads(content))
+                            incoming.setdefault("source", {})["filename"] = uploaded.name
+                            start_draft(incoming, profiles, imported=True)
+                            st.session_state.open_editor = True
+                            st.session_state.notice = f"Imported {incoming['name']} as a draft. Review it, then save when ready."
+                            st.rerun()
+                    except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile) as exc:
+                        st.error(str(exc))
+                st.caption("Import is manual, one worksheet at a time. Category comes from the file and can be edited in Overview. Nothing is saved until you click Save as new version.")
     st.divider()
-    nightscout_view = sidebar_controls((reference if page in ("View", "Compare") and reference else st.session_state.get("draft", {})).get("overview", {}).get("timezone", "UTC"))
+    profile_zone=(reference if page in ("View", "Compare") and reference else st.session_state.get("draft", {})).get("overview", {}).get("timezone", "Europe/Amsterdam")
+    if page == "Data":
+        profile_zone=st.text_input("Display timezone",value=profile_zone,key="health_timezone")
+        data_unit=st.selectbox("Glucose units",["mmol/L","mg/dL"],key="health_glucose_unit")
+    nightscout_view = sidebar_controls(profile_zone)
     st.caption("Changes remain in this browser session until saved. Save or download your draft before closing or refreshing.")
 
+
+if page == "Data":
+    if "draft" in st.session_state:
+        st.session_state.seeds = deepcopy(st.session_state.raw_schedules)
+        st.session_state.extra_seed = deepcopy(st.session_state.raw_extra)
+    st.title("Health data")
+    st.caption("Nightscout and Garmin timelines · select sources, dates and layers in the sidebar")
+    if nightscout_view and nightscout_view['days']:
+        if nightscout_view['loaded']['zone'] != profile_zone:
+            st.info("Reload data to use the selected display timezone.")
+        else:
+            empty=go.Figure();empty.update_layout(title='Health data',yaxis_title='')
+            view=dict(nightscout_view,data_only=True)
+            figures,navigation=prepared_graphs(empty,view,data_unit,dark)
+            if len(figures)>1:
+                render_graphs(figures,dark,navigation,cache=view['loaded'])
+            else:st.info("Choose data layers in the sidebar. Daily values appear in the overview when a graph is selected.")
+    else:st.info("Load GarminDB or Nightscout data, then select the days to view.")
+    sync_native_theme(dark)
+    st.stop()
 
 references = []
 if reference:

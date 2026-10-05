@@ -35,12 +35,12 @@ class ComparisonTests(unittest.TestCase):
     def test_grouped_overlay_and_profile_axis(self):
         loaded=sample_data();profile=go.Figure(go.Scatter(x=[0,1440],y=[9,10]))
         profile.update_layout(yaxis=dict(title='g/U',rangemode='normal'))
-        for overlay,kinds in [('IOB + boluses',{'iob','bolus'}),('COB + carbs',{'cob','carbs'})]:
+        for overlay,kinds in [('IOB + Boluses',{'iob','bolus'}),('COB + Carbs',{'cob','carbs'})]:
             fig=graph_figures(profile,loaded,[loaded['first']],'One day',[],'mmol/L',True,overlay=overlay)[0]
-            self.assertEqual({t.meta['kind'] for t in fig.data if t.meta},kinds)
+            self.assertEqual({t.meta['kind'] for t in fig.data if t.meta and not t.meta.get('legend_proxy')},kinds)
             self.assertTrue(all(t.yaxis=='y2' for t in fig.data if t.meta))
             self.assertEqual(fig.layout.yaxis.rangemode,'normal')
-            self.assertEqual(len(fig.data),3)
+            self.assertEqual(len([t for t in fig.data if not (t.meta or {}).get('legend_proxy')]),3)
 
     def test_scheduled_targets_never_displayed(self):
         import pandas as pd
@@ -71,13 +71,13 @@ class ComparisonTests(unittest.TestCase):
             dict(time=start+timedelta(days=d),end=start+timedelta(days=d,hours=1),low=118.8,high=144,source='Temporary target',reason='Activity') for d in (0,1)])
         days=[loaded['first'],loaded['last']]
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,10],name='LenStandardV17'))
-        figs=graph_figures(profile,loaded,days,'Multiple days',['IOB + boluses','COB + carbs','Nightscout targets'],'mmol/L',True)
+        figs=graph_figures(profile,loaded,days,'Multiple days',['IOB + Boluses','COB + Carbs','Temporary Targets'],'mmol/L',True)
         for fig in figs[1:]:
             self.assertEqual(sum(bool(t.showlegend) for t in fig.data),1 if fig.layout.title.text.startswith('Temp targets') else 2)
             for trace in fig.data:
                 self.assertNotIn('2026-',trace.name)
                 if trace.mode and 'lines' in trace.mode:self.assertEqual(trace.line.dash,'solid')
-                self.assertTrue(trace.meta['date'])
+                if not trace.meta.get('legend_proxy'):self.assertTrue(trace.meta['date'])
             if fig.data[0].meta['kind']=='target':
                 self.assertTrue(all(t.fill=='none' for t in fig.data))  # Unknown historical baseline: lines only.
             else:
@@ -91,12 +91,12 @@ class ComparisonTests(unittest.TestCase):
         profile.update_layout(yaxis=dict(title='g/U',rangemode='normal'))
         view=dict(loaded=loaded,days=[loaded['first'],loaded['last']],mode='Median + band',layers=['Glucose'],overlay='None')
         bundle=navigation_bundle(profile,view,'mmol/L',True)
-        self.assertEqual(set(bundle['overlays']),set(OVERLAY_CHOICES))
+        self.assertEqual(set(bundle['overlays']),{x for x in OVERLAY_CHOICES if not x.startswith('Garmin · ')})
         self.assertEqual(bundle['overlay'],'None')
         self.assertTrue(any(t.get('meta',{}).get('kind')=='median' for t in bundle['overlays']['Glucose']['selected']['data']))
         self.assertEqual({t.get('meta',{}).get('date') for t in bundle['overlays']['Glucose']['daily']['data'] if t.get('meta',{}).get('kind')=='glucose'},set(bundle['days']))
-        for name,kinds in [('IOB + boluses',{'iob','bolus'}),('COB + carbs',{'cob','carbs'})]:
+        for name,kinds in [('IOB + Boluses',{'iob','bolus'}),('COB + Carbs',{'cob','carbs'})]:
             top=bundle['overlays'][name]['daily']
-            self.assertEqual({t['meta']['kind'] for t in top['data'] if t.get('meta')},kinds)
+            self.assertEqual({t['meta']['kind'] for t in top['data'] if t.get('meta') and not t['meta'].get('legend_proxy')},kinds)
             self.assertEqual(top['layout']['yaxis']['rangemode'],'normal')
         self.assertNotIn('yaxis2',bundle['overlays']['None']['selected']['layout'])

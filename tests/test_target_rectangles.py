@@ -42,8 +42,8 @@ class TargetRectangleTests(unittest.TestCase):
             draft=go.Figure(go.Scatter(x=[0,1440],y=[5,5]))
             for mode in ('One day','Multiple days','Median + band'):
                 for unit,upper in [('mmol/L',20),('mg/dL',360)]:
-                    figures=graph_figures(draft,snapshot,[START.date()],mode,['Nightscout targets'],unit,False,
-                                          overlay='Nightscout targets')
+                    figures=graph_figures(draft,snapshot,[START.date()],mode,['Temporary Targets'],unit,False,
+                                          overlay='Temporary Targets')
                     self.assertEqual(list(figures[0].layout.yaxis2.range),[0,upper])
                     self.assertEqual(list(figures[1].layout.yaxis.range),[0,upper])
                     self.assertFalse(figures[1].layout.yaxis.autorange)
@@ -79,7 +79,7 @@ class TargetRectangleTests(unittest.TestCase):
         # These limits come only from Nightscout history, regardless of the draft.
         for value in (2,15):
             draft=go.Figure(go.Scatter(x=[0,1440],y=[value,value]))
-            figure=graph_figures(draft,snapshot,[START.date()],'One day',[],'mmol/L',False,overlay='Nightscout targets')[0]
+            figure=graph_figures(draft,snapshot,[START.date()],'One day',[],'mmol/L',False,overlay='Temporary Targets')[0]
             rectangle=next(t for t in figure.data if t.meta and t.meta.get('kind')=='target_fill')
             self.assertEqual(list(rectangle.y),[y for t in traces if t.meta['kind']=='target_fill' for y in t.y])
             self.assertEqual(rectangle.yaxis,'y2')

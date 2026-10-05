@@ -6,11 +6,13 @@ import streamlit as st
 
 
 def loaded_days(loaded):
-    return [loaded['first'] + timedelta(days=i)
+    days = [loaded['first'] + timedelta(days=i)
             for i in range((loaded['last'] - loaded['first']).days + 1)]
+    return [d for d in days if loaded['day_sources'].get(d)] if 'day_sources' in loaded else days
 
 
 def select_day(day, multiple):
+    st.session_state.health_date_revision=st.session_state.get("health_date_revision",0)+1
     if multiple:
         selected = set(st.session_state.get('ns_days', []))
         selected.symmetric_difference_update([day])
@@ -20,11 +22,14 @@ def select_day(day, multiple):
 
 
 def select_days(days):
+    st.session_state.health_date_revision=st.session_state.get("health_date_revision",0)+1
     st.session_state.ns_days = list(days)
 
 
 def day_calendar(loaded, multiple=False):
     available = loaded_days(loaded)
+    if not available:
+        st.caption('No recorded dates available. Load another date range.');return []
     allowed = set(available)
     if st.session_state.get('ns_day') not in allowed:
         st.session_state.ns_day = available[-1]
@@ -34,7 +39,7 @@ def day_calendar(loaded, multiple=False):
         st.session_state.ns_days = sorted(set(st.session_state.ns_days) & allowed)
     selected = set(st.session_state.ns_days if multiple else [st.session_state.ns_day])
     st.markdown('**Days to display**' if multiple else '**Day to display**')
-    st.caption('Colored = selected · enabled = loaded · gray = outside loaded range. Selection does not refresh data.')
+    st.caption('Colored = selected · enabled = loaded · gray = outside loaded range. Selection does not refresh data. G = Garmin records.')
     with st.container(key='ns_calendar'):
         st.markdown('''<style>
 .st-key-ns_calendar [data-testid="stHorizontalBlock"] {gap:3px;}
@@ -56,8 +61,8 @@ def day_calendar(loaded, multiple=False):
                         column.empty()
                         continue
                     day = date(year, month, number)
-                    column.button(str(number),key=f'ns_calendar_{day}',disabled=day not in allowed,
+                    column.button(str(number)+(' · G' if 'Garmin records' in loaded.get('day_sources',{}).get(day,[]) else ''),key=f'ns_calendar_{day}',disabled=day not in allowed,
                         type='primary' if day in selected else 'secondary',width='stretch',
-                        help=f'{day} · '+('Loaded (records may contain gaps)' if day in allowed else 'Not loaded'),
+                        help=f'{day} · '+(', '.join(loaded['day_sources'].get(day,[])) or 'No Garmin records' if 'day_sources' in loaded and day in allowed else 'Loaded (records may contain gaps)' if day in allowed else 'Not loaded'),
                         on_click=select_day,args=(day,multiple))
     return sorted(selected)

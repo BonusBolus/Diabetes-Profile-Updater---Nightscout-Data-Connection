@@ -41,7 +41,7 @@ class CustomGraphTests(unittest.TestCase):
 
     def test_grouped_layers_control_their_hourly_panels(self):
         loaded=sample_data();profile=go.Figure()
-        for label,key,continuous in [('IOB + boluses','bolus','iob'),('COB + carbs','carbs','cob')]:
+        for label,key,continuous in [('IOB + Boluses','bolus','iob'),('COB + Carbs','carbs','cob')]:
             figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',[label],'mmol/L',True)
             self.assertEqual(len(figs),3)
             self.assertTrue(any((t.meta or {}).get('dataset')==continuous for t in figs[1].data))
@@ -61,6 +61,6 @@ if 'ns_loaded' not in st.session_state:
 sidebar_controls('UTC')
 ''').run()
         self.assertFalse(at.exception)
-        self.assertEqual(at.session_state.ns_layers,['IOB + boluses','COB + carbs'])
-        at.button_group(key='ns_layers').set_value(['Custom graph']).run()
+        self.assertEqual(at.session_state.ns_layers,['IOB + Boluses','COB + Carbs'])
+        at.button(key='add_custom_layer').click().run()
         self.assertFalse(at.exception)

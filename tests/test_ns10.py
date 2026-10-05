@@ -39,7 +39,7 @@ class GraphRevisionTests(unittest.TestCase):
         loaded['data']['variable_sens']=pd.DataFrame([dict(time=at,value=90,label='variable_sens')])
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,9],meta=dict(kind='profile')))
         figures=graph_figures(profile,loaded,[at.date()],'One day',
-            ['IOB + boluses','COB + carbs','Variable sensitivity'],'mmol/L',True,overlay='Variable sensitivity')
+            ['IOB + Boluses','COB + Carbs','Variable Sensitivity'],'mmol/L',True,overlay='Variable Sensitivity')
         self.assertEqual(figures[0].layout.yaxis2.title.text,'mmol/L/U')
         overlay=next(t for t in figures[0].data if (t.meta or {}).get('kind')=='variable_sens')
         self.assertEqual(list(overlay.y),[5])

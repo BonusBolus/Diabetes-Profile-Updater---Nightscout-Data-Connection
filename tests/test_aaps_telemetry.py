@@ -55,7 +55,7 @@ class TelemetryTests(unittest.TestCase):
         profile=go.Figure(go.Scatter(x=[0,1440],y=[1,1],meta=dict(kind='profile')))
         profile.update_layout(title='Basal',yaxis_title='U/h')
         for mode in ('One day','Median + band'):
-            figures=graph_figures(profile,loaded,days,mode,['IOB + boluses','COB + carbs','Variable sensitivity'],'mmol/L',True)
+            figures=graph_figures(profile,loaded,days,mode,['IOB + Boluses','COB + Carbs','Variable Sensitivity'],'mmol/L',True)
             variable=next(f for f in figures if (f.layout.meta or {}).get('dataset')=='variable_sens')
             self.assertEqual(variable.layout.yaxis.title.text,'mmol/L/U')
             self.assertTrue(variable.data)

@@ -17,10 +17,10 @@ class GraphControlTests(unittest.TestCase):
                 dict(time=datetime(2026,9,16,h,m,tzinfo=timezone.utc),value=value,label=label)
                 for h,m in [(0,0),(23,59)]])
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,9]))
-        for overlay in ['COB + carbs','IOB + boluses']:
+        for overlay in ['COB + Carbs','IOB + Boluses']:
             for matched in (False,True):
                 figures=graph_figures(profile,loaded,[loaded['first']],'One day',
-                    ['COB + carbs','IOB + boluses'],'mmol/L',True,overlay=overlay,same_scale=matched)
+                    ['COB + Carbs','IOB + Boluses'],'mmol/L',True,overlay=overlay,same_scale=matched)
                 for fig in figures:
                     for trace in fig.data:
                         if trace.mode and 'text' in trace.mode:
@@ -30,6 +30,20 @@ class GraphControlTests(unittest.TestCase):
                             self.assertGreaterEqual(ceiling,max(trace.y)*1.2)
                 if matched:
                     self.assertEqual(figures[0].layout.yaxis.range,figures[0].layout.yaxis2.range)
+
+    def test_smb_baseline_area_and_hover_retain_doses(self):
+        from nightscout_charts import dataset_traces
+        loaded=sample_data();loaded['_chart_cache']={}
+        loaded['data']['bolus']=pd.DataFrame([
+            dict(time=datetime(2026,9,16,10,i,tzinfo=timezone.utc),value=value,label='SMB')
+            for i,value in enumerate([.05,.2,.5,1.5])])
+        trace=dataset_traces('bolus',loaded,[loaded['first']],'One day','mmol/L',True)[0]
+        self.assertEqual(list(trace.y),[0,0,0,0])
+        self.assertEqual([r[1] for r in trace.customdata],[.05,.2,.5,1.5])
+        self.assertAlmostEqual(trace.marker.size[1]**2/trace.marker.size[0]**2,4)
+        self.assertGreater(trace.marker.size[3],trace.marker.size[2])
+        self.assertFalse(trace.cliponaxis)
+        self.assertTrue(trace.meta['baseline_smb'])
 
     def test_smb_filter_matches_grid_and_median_without_removing_unknown(self):
         loaded=sample_data();loaded['_chart_cache']={}
@@ -63,7 +77,7 @@ class GraphControlTests(unittest.TestCase):
         add_profile_guides(profile,changes,True)
         for times in (changes,[420]):
             profile.layout.meta={'profile_changes':times}
-            figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',['Glucose','IOB + boluses','COB + carbs','Temporary basal'],'mmol/L',True)
+            figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',['Glucose','IOB + Boluses','COB + Carbs','Temporary Basal'],'mmol/L',True)
             for fig in figs:
                 self.assertEqual([s.x0 for s in fig.layout.shapes if s.name=='Profile change'],times)
 
@@ -86,14 +100,14 @@ if view:
         self.assertTrue(at.button(key='ns_calendar_2026-08-29').disabled)
         at.button(key='ns_calendar_2026-08-31').click().run()
         self.assertEqual(at.session_state.ns_day,date(2026,8,31))
-        at.radio(key='ns_mode').set_value('Median + band').run()
+        at.button_group(key='health_date_view').set_value('Date range').run(); at.toggle(key='health_median_mode').set_value(True).run()
         at.button(key='ns_calendar_2026-08-31').click().run()
         self.assertNotIn(date(2026,8,31),at.session_state.ns_days)
         at.button(key='ns_clear_days').click().run()
         self.assertEqual(at.session_state.ns_days,[])
         at.button(key='ns_all_days').click().run()
         self.assertEqual(len(at.session_state.ns_days),4)
-        at.button_group(key='ns_layers').set_value(['Glucose','IOB + boluses']).run()
+        at.button_group(key='ns_layers_diabetes').set_value(['Glucose','IOB + Boluses']).run()
         self.assertFalse(any(getattr(x,'key',None)=='ns_overlay_ic' for x in at.button_group))
         self.assertFalse(any(getattr(x,'key',None)=='ns_same_scale_ic' for x in at.toggle))
         self.assertFalse(any(getattr(x,'key',None)=='ns_next_ic' for x in at.button))

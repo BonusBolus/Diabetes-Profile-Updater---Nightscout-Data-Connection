@@ -113,18 +113,19 @@ class NightscoutTests(unittest.TestCase):
         profile = go.Figure(go.Scatter(x=[0,1440],y=[1,1],name='Draft',line_shape='hv'))
         profile.update_layout(yaxis_title='U/h',uirevision='basal')
         figures = graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',
-                             ['Glucose','Temporary basal','IOB + boluses','COB + carbs'],'mmol/L',True,overlay='Glucose')
+                             ['Glucose','Temporary Basal','IOB + Boluses','COB + Carbs'],'mmol/L',True,overlay='Glucose')
         fig=figures[0]
         self.assertEqual(fig.data[0].name,'Draft')
         self.assertEqual(list(fig.data[0].y),[1,1])
         self.assertEqual(fig.layout.yaxis2.side,'right')
         self.assertTrue(any(t.name=='Median glucose' and t.yaxis=='y2' for t in fig.data))
         self.assertEqual(len(figures),8)  # profile, glucose, basal, percent, IOB, COB, two hourly summaries
-        self.assertTrue(any(t.meta and t.meta.get('dataset')=='iob' for t in figures[4].data))
-        self.assertFalse(any(t.meta and t.meta.get('kind')=='bolus' for t in figures[4].data))
-        self.assertTrue(any(t.meta and t.meta.get('dataset')=='cob' for t in figures[5].data))
-        self.assertEqual(figures[6].layout.meta['dataset'],'bolus')
-        self.assertEqual(figures[7].layout.meta['dataset'],'carbs')
+        iob=next(f for f in figures if f.layout.meta.get('dataset')=='iob')
+        cob=next(f for f in figures if f.layout.meta.get('dataset')=='cob')
+        self.assertTrue(any(t.meta and t.meta.get('dataset')=='iob' for t in iob.data))
+        self.assertFalse(any(t.meta and t.meta.get('kind')=='bolus' for t in iob.data))
+        self.assertTrue(any(t.meta and t.meta.get('dataset')=='cob' for t in cob.data))
+        self.assertEqual([f.layout.meta['dataset'] for f in figures if f.layout.meta.get('kind')=='hourly'],['carbs','bolus'])
         for figure in figures:
             self.assertIn('2026-09-16',figure.layout.title.text)
             self.assertIn('2026-09-17',figure.layout.title.text)
@@ -252,10 +253,10 @@ class TargetContinuityAndStyleTests(unittest.TestCase):
         self.assertTrue(all(t.y[0]==6.6 for t in targets))
         self.assertEqual({v.split(' · ')[0] for t in targets for v in t.customdata},{'Activity','Eating Soon','Hypo','Custom'})
         bolus=dataset_traces('bolus',loaded,[loaded['first']],'One day','mmol/L',True)
-        smb,user=bolus
+        smb,user=[t for t in bolus if not t.meta.get("legend_proxy")]
         self.assertEqual(smb.marker.symbol,'triangle-up')
-        self.assertEqual(user.marker.symbol,'line-ew')
-        self.assertGreater(user.marker.line.width[0],0)  # stroked line forms an actual rectangle
+        self.assertEqual(user.marker.symbol,'square')
+        self.assertGreater(user.marker.line.width,0)
         self.assertGreater(smb.marker.size[1],smb.marker.size[0])
         self.assertGreater(user.marker.size[1],user.marker.size[0])
         self.assertEqual(list(user.text),['1 U','4 U'])

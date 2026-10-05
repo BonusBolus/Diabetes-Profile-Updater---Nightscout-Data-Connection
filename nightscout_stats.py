@@ -60,7 +60,8 @@ def hourly_events(loaded,key,days,exclude_smb=False):
             instants=minutes[hours==hour]
             elapsed=bool(len(instants) and instants[0]<loaded['loaded_at'])
             full=bool(elapsed and instants[-1]+pd.Timedelta(minutes=1)<=loaded['loaded_at'])
-            usable=available and elapsed
+            in_source=loaded.get('nightscout_first',day)<=day<=loaded.get('nightscout_last',day)
+            usable=available and elapsed and in_source
             row.append(float(sums.get((day,hour),0.)) if usable else None)
             events.append(int(counts.get((day,hour),0)) if usable else None)
             flags.append(bool(usable and full))

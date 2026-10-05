@@ -6,6 +6,7 @@ from chart_cache import cached
 from appearance import COLORS as METRIC_COLORS, LIGHT_COLORS, palette, reference_identity_colors
 from nightscout_charts import dataset_traces, dataset_color
 from nightscout_stats import hourly_events
+from garmin_data import METRICS, metric_unit
 
 
 def custom_bundle(loaded, days, all_days, mode, unit, dark, profiles):
@@ -31,6 +32,15 @@ def custom_bundle(loaded, days, all_days, mode, unit, dark, profiles):
         fields.append(dict(color=color,id='ns:'+key,label=label,unit=axis_unit,dataset=key,group='Nightscout',
                            selected=json.loads(go.Figure(selected).to_json())['data'],
                            daily=json.loads(go.Figure(daily).to_json())['data']))
+    for key,(label,axis_unit,color,*_) in METRICS.items():
+        if ('g_steps' if key=='g_steps_cumulative' else key) not in loaded['data'] or key=='g_activity':continue
+        axis_unit=metric_unit(key,loaded)
+        selected=dataset_traces(key,loaded,days,mode,unit,dark)
+        daily=dataset_traces(key,loaded,all_days,'One day',unit,dark)
+        fields.append(dict(id='garmin:'+key,label=label,unit=axis_unit,color=color,group='Garmin',dataset=key,
+                           selected_unit='Average sleep (min/hour)' if key=='g_sleep' and mode=='Median + band' else axis_unit,
+                           daily_unit=axis_unit,selected=json.loads(go.Figure(selected).to_json())['data'],
+                           daily=json.loads(go.Figure(daily).to_json())['data']))
     for metric,fig in profiles.items():
         groups={}
         for trace in fig.data:
@@ -52,4 +62,4 @@ def custom_bundle(loaded, days, all_days, mode, unit, dark, profiles):
                                metric_label='Target range' if metric=='target' else fig.layout.title.text.split(' · ')[0],
                                profile_name=traces[0].name,source_role=role,source_color=source_color,
                                group='Profiles',dataset='profile',selected=data,daily=data))
-    return dict(fields=fields,selected=['ns:glucose'])
+    return dict(fields=fields,selected=['ns:glucose'] if not loaded['data']['glucose'].empty else [next((f['id'] for f in fields if f['group']=='Garmin'),'ns:glucose')])

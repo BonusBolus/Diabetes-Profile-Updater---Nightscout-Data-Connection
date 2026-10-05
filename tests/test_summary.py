@@ -20,12 +20,12 @@ class SummaryTests(unittest.TestCase):
             self.assertEqual(stats.iloc[0]['days'],2)
             self.assertTrue(pd.isna(stats.iloc[1]['median']))
         profile=go.Figure(go.Scatter(x=[0,1440],y=[1,1]))
-        figures=graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',['IOB + boluses','COB + carbs'],'mmol/L',True)
+        figures=graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',['IOB + Boluses','COB + Carbs'],'mmol/L',True)
         self.assertEqual(len(figures),5) # profile, IOB, COB, two hourly graphs
-        for fig in figures[1:3]:
+        for fig in [f for f in figures if f.layout.meta.get('dataset') in ('iob','cob')]:
             self.assertEqual(sum(t.meta and t.meta.get('kind')=='median' for t in fig.data if t.meta),1)
             self.assertFalse(any(t.meta and t.meta.get('date') for t in fig.data))
-        self.assertEqual([f.layout.meta['dataset'] for f in figures[-2:]],['bolus','carbs'])
+        self.assertEqual([f.layout.meta['dataset'] for f in figures if f.layout.meta.get('kind')=='hourly'],['carbs','bolus'])
 
     def test_basal_duration_weighted_within_day_missing_is_not_zero(self):
         loaded=sample_data();start=datetime(2026,9,16,tzinfo=UTC)

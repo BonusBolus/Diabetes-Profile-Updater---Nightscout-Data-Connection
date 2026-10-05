@@ -22,7 +22,7 @@ class ViewerTests(unittest.TestCase):
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,10],name='LenStandardV17',line_color='#ff9800',meta=dict(kind='profile',label='LenStandardV17',unit='g/U',source_role='ref2')))
         profile.update_layout(meta=dict(profile_changes=[600]),title='I:C',yaxis=dict(title='g/U',rangemode='normal'))
         view=dict(loaded=loaded,days=[loaded['first'],loaded['last']],mode='Median + band',
-                  layers=['Glucose','Temporary basal','IOB + boluses','COB + carbs','Variable sensitivity','Custom graph'],overlay='None')
+                  layers=['Glucose','Temporary Basal','IOB + Boluses','COB + Carbs','Variable Sensitivity','Custom graph'],overlay='None')
         from nightscout_charts import add_profile_guides
         add_profile_guides(profile,[600],True)
         loaded['last']=loaded['last']+timedelta(days=1)
