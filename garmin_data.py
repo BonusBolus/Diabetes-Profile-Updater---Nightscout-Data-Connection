@@ -84,9 +84,15 @@ def metric_unit(key, loaded):
     return extra[key][system=='Statute'] if key in extra and system in ('Metric','Statute') else METRICS[key][1]
 
 
-def load_garmin(folder, first, last, source_zone, display_zone, measurement_units='Metric'):
+def load_garmin(folder, first, last, source_zone, display_zone, measurement_units='Metric', categories=None):
     ZoneInfo(source_zone);ZoneInfo(display_zone)
-    if last<first or (last-first).days>30:raise ValueError('Load between 1 and 31 days at a time.')
+    if last<first or (last-first).days>365:raise ValueError('Load between 1 and 366 days at a time.')
+    selected=set(categories) if categories is not None else {'steps','heart_rate','activity','stress','sleep','respiration'}
+    if not selected or not selected<={'steps','heart_rate','activity','stress','sleep','respiration'}:raise ValueError('Select a supported Garmin category.')
+    wanted=set()
+    for category in selected:
+        wanted.update({'steps':['g_steps'],'heart_rate':['g_hr'],'activity':['g_activity',*[k for k in METRICS if k.startswith('g_workout_')]],
+                       'stress':['g_stress'],'sleep':['g_sleep','g_rr','g_hrv','g_spo2'],'respiration':['g_rr','g_sleep']}[category])
     root=Path(folder).expanduser()
     if not root.is_dir():raise ValueError('Choose the folder containing the GarminDB .db files on this PC.')
     health_root=root.parent if root.name.casefold()=='dbs' else root
@@ -109,7 +115,7 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
                 if ck not in cache:cache[ck]=read_table(conn,table,clock,begin,stop,overlap)
                 return cache[ck]
             for key,(label,unit,color,source,table,column) in METRICS.items():
-                if source!=db:continue
+                if source!=db or key not in wanted:continue
                 clock='start_time' if key=='g_activity' else 'timestamp'
                 raw,cols=read(table,clock,'stop_time' if key=='g_activity' else None)
                 if raw.empty or (column not in cols and key!='g_activity'):continue
@@ -140,9 +146,10 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
                             recovered=incomplete & observed.gt(raw.time)
                             raw.loc[recovered,'end']=observed[recovered]
                             raw.loc[recovered,'source']='GarminDB · end at last recorded activity sample'
+                    # Activity-only coordinates cannot establish a general location timeline.
                     result=raw[['time','end','value','label','activity_id','source']]
                     # All available activity summary fields, with original schema names.
-                    safe=raw.drop(columns=[c for c in raw if 'lat' in c or 'long' in c or c in ('time','end')])
+                    safe=raw.drop(columns=[c for c in raw if 'lat' in c or 'long' in c or c in ('time','end','location','city','city_name')])
                     activities.extend({k:None if pd.isna(v) else v for k,v in row.items()} for row in safe.to_dict('records') if str(first)<=str(row.get('start_time',''))[:10]<=str(last))
                 elif key=='g_steps':
                     if 'activity_type' not in raw:continue
@@ -174,7 +181,7 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
                 if not result.empty:
                     data[key]=result.reset_index(drop=True)
                     inventory.append(dict(field=label,records=len(result),source=table))
-            if db=='garmin':
+            if db=='garmin' and selected.intersection({'sleep','respiration'}):
                 for table in DAILY_TABLES:
                     raw,cols=read(table,'day')
                     if raw.empty:continue
@@ -214,7 +221,8 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
         for row in data['g_sleep'].itertuples():inside |= rr.time.ge(row.time)&rr.time.lt(row.end)
         if inside.any():data['g_sleep_rr']=rr[inside].copy()
     from garmin_exports import supplement_exports
-    sleep_notes=supplement_exports(health_root,data,activities,daily,inventory,warnings,start_utc,end_utc,display_zone)
+    sleep_notes=supplement_exports(health_root,data,activities,daily,inventory,warnings,start_utc,end_utc,display_zone,
+                                   include_sleep=bool(selected.intersection({'sleep','respiration'})),include_activity='activity' in selected)
     activity_count=len(data.get('g_activity',[]))
     inventory.append(dict(field='Recorded activity intervals',records=activity_count,source='GarminDB / FIT sessions'))
     if not activity_count and any(k.startswith('g_workout_') for k in data):
@@ -224,9 +232,12 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
         sleep_sessions=[s for s in sleep_sessions if not (s['time']<b and s['end']>a)]
         sleep_sessions.append(dict(time=a,end=b,date=note['date']))
     add_sleep_fields(data,daily,sleep_sessions,display_zone)
+    if 'sleep' not in selected:
+        data={k:v for k,v in data.items() if k!='g_sleep' and not k.startswith('g_sleep_') and k not in ('g_hrv','g_spo2')}
+    if 'respiration' not in selected:data.pop('g_waking_rr',None)
     if not data and not daily: warnings.append('No supported populated health fields found for these dates.')
-    return dict(sleep_notes=sleep_notes,data=data,daily=daily,activities=activities,inventory=inventory,warnings=list(dict.fromkeys(warnings)),
-                first=first,last=last,zone=display_zone,source_zone=source_zone,measurement_units=measurement_units,loaded_at=datetime.now(timezone.utc))
+    return dict(sleep_notes=sleep_notes,sleep_sessions=sleep_sessions,data=data,daily=daily,activities=activities,inventory=inventory,warnings=list(dict.fromkeys(warnings)),
+                first=first,last=last,zone=display_zone,source_zone=source_zone,measurement_units=measurement_units,loaded_categories=sorted(selected),loaded_at=datetime.now(timezone.utc))
 
 
 def add_sleep_fields(data,daily,sessions,zone):
@@ -258,7 +269,7 @@ def merge_sources(ns, garmin):
     if ns:
         for day in pd.date_range(ns['first'],ns['last']):base['day_sources'][day.date()]=['Nightscout loaded']
     if garmin and garmin['zone']==base['zone']:
-        base['garmin_loaded_at']=garmin['loaded_at'];base['garmin_sleep_notes']=garmin.get('sleep_notes',[]);base['garmin_units']=garmin.get('measurement_units','Metric');base['data'].update(garmin['data']);base['garmin_daily']=garmin['daily'];base['garmin_activities']=garmin['activities']
+        base['garmin_loaded_at']=garmin['loaded_at'];base['garmin_sleep_notes']=garmin.get('sleep_notes',[]);base['garmin_sleep_sessions']=garmin.get('sleep_sessions',[]);base['garmin_units']=garmin.get('measurement_units','Metric');base['data'].update(garmin['data']);base['garmin_daily']=garmin['daily'];base['garmin_activities']=garmin['activities']
         for key,df in garmin['data'].items():
             dates=set(df.time.dt.tz_convert(base['zone']).dt.date)
             if 'end' in df:

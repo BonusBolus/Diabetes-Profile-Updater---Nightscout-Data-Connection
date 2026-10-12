@@ -63,8 +63,8 @@ def utc_bounds(first, last, zone):
         raise NightscoutError("Select both a start date and an end date.")
     if first > last:
         raise NightscoutError("The end date must be on or after the start date.")
-    if (last - first).days >= 31:
-        raise NightscoutError("Load up to 31 days at a time.")
+    if (last - first).days >= 366:
+        raise NightscoutError("Load up to 366 days at a time.")
     return (datetime.combine(first, time.min, tz).astimezone(UTC),
             datetime.combine(last + timedelta(days=1), time.min, tz).astimezone(UTC))
 
@@ -102,12 +102,12 @@ class NightscoutClient:
             raise NightscoutError(f"Unexpected response from {collection}; expected a list of records.")
         return data
 
-    def records(self, collection, start, end):
+    def records(self, collection, start, end, filters=None):
         field = "date" if collection == "entries/sgv" else "created_at"
         def boundary(t):
             return int(t.timestamp() * 1000) if field == "date" else _iso(t)
         def window(a, b):
-            batch = self.get(collection, {f"find[{field}][$gte]": boundary(a), f"find[{field}][$lt]": boundary(b), "count": PAGE_SIZE})
+            batch = self.get(collection, {**(filters or {}), f"find[{field}][$gte]": boundary(a), f"find[{field}][$lt]": boundary(b), "count": PAGE_SIZE})
             # Split full result windows instead of assuming an undocumented skip
             # parameter. Half-open windows keep boundary events exactly once.
             if len(batch) >= PAGE_SIZE:
@@ -123,14 +123,14 @@ class NightscoutClient:
         rows = []
         at = start
         while at < end:
-            until = min(end, at + timedelta(days=1))
+            until = min(end, at + timedelta(days=7 if collection=="treatments" else 2))
             rows.extend(window(at, until))
             at = until
         return rows
 
 
 def normalize_data(entries, treatments, statuses, start, end):
-    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob", "variable_sens", "changes")}
+    points = {key: [] for key in ("glucose", "bolus", "carbs", "iob", "cob", "variable_sens", "changes", "automation_notes")}
     temps, targets, warnings = [], [], []
     rejected = 0
     def add(key, at, value, label=""):
@@ -159,6 +159,13 @@ def normalize_data(entries, treatments, statuses, start, end):
             seen.add(identity)
         at = timestamp(row.get("created_at")) or timestamp(row.get("date"))
         event = row.get("eventType", "Treatment")
+        # Only explicitly tagged notes are automation markers; never infer an
+        # automation execution from ordinary treatments or user-entry logs.
+        note = row.get("notes")
+        if isinstance(note, str) and note.strip().lower().startswith("automation:"):
+            label = note.strip().split(":", 1)[1].strip()
+            if label:
+                add("automation_notes", at, 1, label)
         if event in ("Site Change", "Sensor Start", "Sensor Change", "Insulin Change"):
             add("changes", at, 1, event)
         for field, key in (("insulin", "bolus"), ("carbs", "carbs")):
@@ -221,8 +228,10 @@ def normalize_data(entries, treatments, statuses, start, end):
     data = {}
     for key, values in points.items():
         frame = pd.DataFrame(values, columns=["time", "value", "label"]).sort_values("time")
-        if key not in ("bolus", "carbs", "changes"):
+        if key not in ("bolus", "carbs", "changes", "automation_notes"):
             frame = frame.drop_duplicates("time", keep="last")
+        if key == "automation_notes":
+            frame = frame.drop_duplicates(["time", "label"])
         data[key] = frame.reset_index(drop=True)
     intervals = {"basal": [], "basal_percent": []}
     temps.sort(key=lambda item: item["time"])
@@ -251,19 +260,24 @@ def normalize_data(entries, treatments, statuses, start, end):
     return data, warnings
 
 
-def load_nightscout(url, token, first, last, zone):
+def load_nightscout(url, token, first, last, zone, categories=None):
     start, end = utc_bounds(first, last, zone)
     client = NightscoutClient(url, token)
-    entries = client.records("entries/sgv", start, end)
+    selected=set(categories) if categories is not None else {'glucose','treatments','loop'}
+    if not selected<={'glucose','treatments','loop'}:raise NightscoutError('Select supported Nightscout data categories.')
+    entries = client.records("entries/sgv", start, end) if 'glucose' in selected else []
+    successful=set(selected)
     warnings = []
-    treatments_available = True
+    treatments_available = 'treatments' in selected
     try:
-        treatments = client.records("treatments", start, end)
+        treatments = client.records("treatments", start, end) if treatments_available else []
     except NightscoutError as exc:
         treatments = []
         treatments_available = False
+        successful.discard('treatments')
         warnings.append("Treatments were not loaded: " + str(exc))
-    else:
+    alignment_events=[]
+    if treatments_available:
         for event in ("Temp Basal", "Temporary Target"):
             try:
                 prior = client.get("treatments", {"find[eventType]": event, "find[created_at][$lt]": _iso(start),
@@ -271,22 +285,44 @@ def load_nightscout(url, token, first, last, zone):
                 treatments = prior + treatments
             except NightscoutError as exc:
                 warnings.append(f"The {event.lower()} crossing the start date could not be checked: " + str(exc))
+    # Profile history is required by overlays even when treatment layers are off.
+    # Reuse the full treatment load; otherwise fetch only requested/effective profiles.
+    profiles_available=treatments_available
+    if not treatments_available:
+        try:
+            treatments=client.records('treatments',start,end,filters={'find[originalProfileName][$exists]':'true'})
+            treatments+=client.records('treatments',start,end,filters={'find[eventType]':'Profile Switch'})
+            profiles_available=True
+        except NightscoutError as exc:
+            warnings.append('Profile history was not loaded: '+str(exc))
+    if profiles_available:
         try:
             prior = client.get("treatments", {"find[originalProfileName][$exists]": "true", "find[eventType][$ne]": "Profile Switch", "find[created_at][$lt]": _iso(start),
                                             "find[isValid][$ne]": "false", "count": 1})
             treatments = prior + treatments
         except NightscoutError as exc:
             warnings.append("The effective profile at the start date could not be checked: " + str(exc))
+    if treatments_available:
+        # Alignment context is kept separately: origins before the range do not
+        # become visible timeline events or invent a sensor/site start at midnight.
+        for kind in ('Sensor Start','Sensor Change','Site Change'):
+            try:
+                for record in client.get('treatments',{'find[eventType]':kind,'find[created_at][$lt]':_iso(start),'find[isValid][$ne]':'false','count':1}):
+                    at=pd.to_datetime(record.get('created_at'),utc=True,errors='coerce')
+                    if pd.notna(at) and at<start and record.get('isValid') is not False:alignment_events.append(dict(time=at,label=kind))
+            except NightscoutError as exc:warnings.append('Earlier '+kind.lower()+' context was not available: '+str(exc))
     try:
-        statuses = client.records("devicestatus", start, end)
+        statuses = client.records("devicestatus", start, end) if 'loop' in selected else []
     except NightscoutError as exc:
         statuses = []
+        successful.discard('loop')
         warnings.append("IOB/COB were not loaded: " + str(exc))
     data, issues = normalize_data(entries, treatments, statuses, start, end)
     return {"data": data, "warnings": warnings + issues, "first": first, "last": last, "zone": zone,
             "site": client.url, "loaded_at": datetime.now(UTC),
-            "availability": {"glucose": True, "treatments": treatments_available},
-            "recorded_profiles": recorded_profiles(treatments, start, end)}
+            "availability": {"glucose": 'glucose' in selected, "treatments": treatments_available, "profiles": profiles_available},
+            "loaded_categories": sorted(successful),
+            "alignment_events":alignment_events, "recorded_profiles": recorded_profiles(treatments, start, end)}
 
 
 def local_points(frame, zone, days):

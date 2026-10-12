@@ -33,6 +33,9 @@ metric_colors = COLORS if dark else LIGHT_COLORS
 source_colors = reference_identity_colors(dark)
 st.markdown("""<style>
 .block-container {padding-top: 2rem; padding-bottom: 3rem; max-width: 1500px;}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {gap:.5rem;}
+[data-testid="stSidebar"] h1 {font-size:1.7rem;}
+[data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {font-size:1.1rem; padding:.35rem 0;}
 div[data-testid="stMetric"] {background:var(--secondary-background-color); border:1px solid #80808040;
     padding:14px 18px; border-radius:10px;}
 h1 {letter-spacing:-.04em;} h3 {letter-spacing:-.02em;}
@@ -173,14 +176,12 @@ for state_key in ('reference_category','reference_id','compare_second','second_r
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Health-26")
-    st.caption("Create · compare · keep your history")
+    st.caption("Build: Health-37")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
         st.session_state.page = "Editor"
         st.session_state.show_history = False
-    page = st.radio("Workspace", ["View", "Compare", "Editor", "Data"], index=2,
-        format_func=lambda item: {"View":"View one profile", "Compare":"Compare two profiles", "Editor":"Edit draft", "Data":"View health data"}[item], key="page")
+    page = st.radio("Workspace", ["View", "Compare", "Editor", "Data"], index=2,horizontal=True,key="page")
     show_history = st.checkbox("Browse history / export", key="show_history") if page != "Data" else False
     if show_history:
         page = "History"
@@ -258,14 +259,12 @@ with st.sidebar:
                             st.rerun()
                     except (ValueError, TypeError, KeyError, OSError, zipfile.BadZipFile) as exc:
                         st.error(str(exc))
-                st.caption("Import is manual, one worksheet at a time. Category comes from the file and can be edited in Overview. Nothing is saved until you click Save as new version.")
     st.divider()
     profile_zone=(reference if page in ("View", "Compare") and reference else st.session_state.get("draft", {})).get("overview", {}).get("timezone", "Europe/Amsterdam")
     if page == "Data":
         profile_zone=st.text_input("Display timezone",value=profile_zone,key="health_timezone")
         data_unit=st.selectbox("Glucose units",["mmol/L","mg/dL"],key="health_glucose_unit")
     nightscout_view = sidebar_controls(profile_zone)
-    st.caption("Changes remain in this browser session until saved. Save or download your draft before closing or refreshing.")
 
 
 if page == "Data":

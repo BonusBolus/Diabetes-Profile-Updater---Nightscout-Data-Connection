@@ -1,0 +1,18 @@
+const {chromium}=require('playwright');const assert=require('assert');
+(async()=>{const b=await chromium.launch({args:['--no-sandbox']});const p=await b.newPage({viewport:{width:1450,height:1000}});p.on('pageerror',e=>{throw e;});await p.goto(process.argv[2]);await p.waitForFunction(()=>ready);
+const custom=await p.evaluate(()=>graphs.findIndex(g=>g.layout.meta?.kind==='custom'));await p.evaluate(i=>duplicateGraph(i),custom);const index=await p.evaluate(()=>graphs.length-1),id=await p.evaluate(i=>specs[i].layout.meta.custom_id,index);
+await p.evaluate(id=>changeCustomSetting(id,s=>{s.selected=new Set(['ns:glucose','garmin:g_workout_hr']);s.fieldOptions['garmin:g_workout_hr']={axis:'own',smooth:true,tauSeconds:15};s.axisRanges['field:garmin:g_workout_hr']=[100,200];}),id);await p.evaluate(i=>changePanelState(i,s=>{s.mode='Median + band';}),index);
+const count=await p.evaluate(()=>graphs.length);await p.reload();await p.waitForFunction(()=>ready);assert.equal(await p.evaluate(()=>graphs.length),count);assert(await p.evaluate(()=>[...panelStates.values()].some(s=>s.duplicate&&s.mode==='Median + band')));
+const data=await p.evaluate(()=>specs.filter(s=>s.layout.meta?.kind==='custom').map(s=>serializeCustom(customState(s.layout.meta.custom_id))));assert.equal(data.length,2);assert(data.some(s=>s.selected.includes('garmin:g_workout_hr')&&s.fieldOptions['garmin:g_workout_hr']?.tauSeconds===15));
+const insight=await p.evaluate(()=>graphs.findIndex(g=>g.layout.meta.insight==='activity_after'));await p.evaluate(i=>changePanelState(i,s=>{s.mode='Median + band';s.insight.normalization='delta';s.insight.duration=2;s.insight.aggregation='Average';}),insight);
+assert(await p.evaluate(i=>graphs[i].layout.yaxis.title.text.startsWith('Δ'),insight));assert(await p.evaluate(i=>graphs[i].data.some(t=>t.name==='Average'),insight));
+const sensor=await p.evaluate(()=>graphs.findIndex(g=>g.layout.meta.insight==='sensor_variability'));await p.evaluate(i=>changePanelState(i,s=>{s.mode='Median + band';s.insight.metric='rate';}),sensor);assert(await p.evaluate(i=>graphs[i].data.some(t=>t.meta?.label?.includes('variability')),sensor));
+await p.reload();await p.waitForFunction(()=>ready);assert(await p.evaluate(i=>panelStateAt(i).insight.aggregation==='Average'&&graphs[i].data.some(t=>t.name==='Average'),insight));
+await p.evaluate(()=>changePanelState(1,s=>{s.mode='Multiple days';}));const events=await p.evaluate(()=>graphs[1].data.filter(t=>t.meta?.kind==='profile_event'));assert(events.length);assert(events.every(t=>t.yaxis!=='y'));
+await p.evaluate(()=>duplicateGraph(0));const profileCopy=await p.evaluate(()=>graphs.length-1);
+await p.evaluate(i=>changePanelState(i,s=>{s.mode='Median + band';s.overlay='Glucose';s.sameScale=true;}),profileCopy);
+assert(await p.evaluate(i=>graphs[i].data.some(t=>t.meta?.kind==='median'),profileCopy));assert(await p.evaluate(i=>JSON.stringify(graphs[i].layout.yaxis.range)===JSON.stringify(graphs[i].layout.yaxis2.range),profileCopy));
+await p.evaluate(i=>changePanelState(i,s=>{s.overlay='COB + Carbs';s.sameScale=false;}),profileCopy);assert(await p.evaluate(()=>currentOverlay==='Glucose'));
+await p.evaluate(i=>removeGraphCopy(i),profileCopy);assert(await p.evaluate(()=>ready && !syncing));
+await p.evaluate(()=>cycleDay(1));assert(await p.evaluate(()=>Object.values(panelCards).filter(p=>specs[p.graphIndex].layout.meta?.kind==='insight').every(p=>p.hidden)));assert(await p.evaluate(()=>panelUIs.filter(u=>u.mode && u.panel.isConnected).every(u=>u.mode.hidden)));
+console.log('Reload preserves duplicate content, axes and modes; Insights delta/variability and single-day validity passed');await b.close();})().catch(e=>{console.error(e);process.exit(1)})

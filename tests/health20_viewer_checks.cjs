@@ -9,7 +9,7 @@ const run=(h,code)=>vm.runInContext(code,h.context);
   const ids=()=>run(h,'[...customStates.keys()]');
   const first=ids()[0];assert(first);
   assert.deepEqual(run(h,'customExtent(Array.from({length:200000},(_,i)=>i))'),[0,199999]);
-  assert.equal(run(h,"customDisplayField({dataset:'g_sleep',unit:'Sleep stage',selected_unit:'Sleep probability (%)',daily_unit:'Sleep stage'},customState(),false).unit"),mode===2?'Average sleep (min/hour)':'Sleep probability (%)');
+  assert.equal(run(h,"customDisplayField({dataset:'g_sleep',unit:'Sleep stage',selected_unit:'Sleep probability (%)',daily_unit:'Sleep stage'},customState(),false).unit"),mode===0?'Sleep probability (%)':'Average sleep (h/hour)');
   assert.equal(run(h,"customDisplayField({dataset:'g_sleep',unit:'Sleep stage',selected_unit:'Sleep probability (%)',daily_unit:'Sleep stage'},customState(),true).unit"),'Sleep stage');
   const ui=run(h,`customUIs.get('${first}')`);
   assert.equal(ui.shading,undefined,'Activity shading is shared by all panels');

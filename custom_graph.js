@@ -16,13 +16,14 @@ function newCustomState(raw={}) {
   for(const [key,range] of Object.entries(raw.axisRanges || {}))if(Array.isArray(range) && range.length===2 && range.every(v=>v===null || Number.isFinite(v)) && (range.includes(null) || range[0]<range[1]))state.axisRanges[key]=range.slice();
   customStates.set(id,state);return state;
 }
+function originalCustomStates(){return [...customStates.values()].filter(s=>{const index=customIndex(s.id);return index>=0 && !panelStateAt(index).duplicate;});}
 function serializeCustom(state) {return {id:state.id,selected:[...state.selected],sameScale:state.sameScale,
   activityShading:state.activityShading,garmin:state.garmin,fieldOptions:state.fieldOptions,axisRanges:state.axisRanges};}
 function customAxisKey(state,field) {return state.fieldOptions[field.id]?.axis==='own'?'field:'+field.id:'unit:'+field.unit;}
 function customDisplayField(field,state,daySelected=dateCycled) {
   return {...field,unit:field.dataset==='g_workout_speed' && ['km/h','mph'].includes(field.unit)
-    ?(state.garmin.pace?'min/km':'km/h'):field.dataset==='g_sleep' && !daySelected && navigation.mode==='Median + band'
-    ?(state.garmin.sleepDistribution?state.garmin.aggregation+' sleep (min/hour)':'Stage composition (%)'):(daySelected?field.daily_unit:field.selected_unit) || field.unit};
+    ?(state.garmin.pace?'min/km':'km/h'):field.dataset==='g_sleep' && selectedDays.length>1 && !daySelected && (panelStates.get(specs[customIndex(state.id)]?.layout.meta?.panel_id)?.mode || navigation.mode)==='Median + band'
+    ?(state.garmin.sleepDistribution?state.garmin.aggregation+' sleep (h/hour)':'Stage composition (%)'):(daySelected?field.daily_unit:field.selected_unit) || field.unit};
 }
 function customExtent(values) {
   let low=Infinity,high=-Infinity;
@@ -158,7 +159,7 @@ function composeCustom(view) {
   });
   for(const field of fields) {
     const index=units.indexOf(customAxisKey(state,field)),axis='y'+(index?index+1:'');
-    const traces=JSON.parse(JSON.stringify(day?field.daily:field.selected));
+    const traces=JSON.parse(JSON.stringify(day?field.daily:(field.modes?.[view.layout.meta.display_mode] || field.selected)));
     for(const trace of traces.filter(t=>!day || !t.meta?.date || t.meta.date===day)) {
       trace.yaxis=axis;trace.xaxis='x';
       const filter=state.fieldOptions[field.id];
@@ -214,13 +215,13 @@ let dormantCustomPanels=[];
 function appendCustomPanel(raw={}) {
   const state=newCustomState(raw),index=specs.length;
   const spec=JSON.parse(JSON.stringify(customTemplate)),daily=JSON.parse(JSON.stringify(customDailyTemplate));
-  spec.layout.meta.custom_id=state.id;daily.layout.meta.custom_id=state.id;
+  spec.layout.meta.custom_id=state.id;daily.layout.meta.custom_id=state.id;spec.layout.meta.panel_id='custom:'+state.id;daily.layout.meta.panel_id='custom:'+state.id;
   specs.push(spec);navigation.figures.push(daily);createPanel(index);return index;
 }
 function removeCustomPanelAt(index) {
   const id=specs[index].layout.meta.custom_id,panel=panelCards[index];
   if(ready)Plotly.purge(graphs[index]);
-  panel.remove();customStates.delete(id);customUIs.delete(id);
+  panel.remove();panelStates.delete(specs[index].layout.meta?.panel_id);customStates.delete(id);customUIs.delete(id);
   specs.splice(index,1);navigation.figures.splice(index,1);graphs.splice(index,1);targetNotes.splice(index,1);
   if(ready){guides.splice(index,1);highlights.splice(index,1);}
   for(let i=moveButtons.length-1;i>=0;i--)if(moveButtons[i].panel===panel)moveButtons.splice(i,1);
@@ -264,7 +265,10 @@ function setupTopControlAreas() {
   if(!profile.parentElement)bar.appendChild(row);
   const areas=controlAreas(row);topControlAreas=areas;
   for(const el of [overlayControl,targetButton].filter(Boolean))areas.content.appendChild(el);
-  const group=settingsGroup(areas.settings,'Profile');group.appendChild(metricSelect);group.appendChild(scaleButton);
+  const group=settingsGroup(areas.settings,'Profile');group.id='profile-settings-group';group.appendChild(metricSelect);group.appendChild(scaleButton);
+  if(!dataOnly){const mode=document.createElement('select');mode.setAttribute('aria-label','Profile overlay display mode');for(const [value,label] of [['Multiple days','Multiple days'],['Median + band','Median']]){const o=document.createElement('option');o.value=value;o.textContent=label;mode.appendChild(o);}mode.addEventListener('change',()=>changePanelState(0,s=>{s.mode=mode.value;}));group.appendChild(mode);const panel={graphIndex:0,isConnected:true},duplicate=document.createElement('button');duplicate.type='button';duplicate.textContent='Duplicate';duplicate.addEventListener('click',()=>duplicateGraph(0));group.appendChild(duplicate);
+    const remove=document.createElement('button');remove.type='button';remove.textContent='Delete graph';remove.setAttribute('aria-label','Delete graph');remove.addEventListener('click',()=>deleteGraph(0));group.appendChild(remove);
+    panelUIs.push({top:true,mode,duplicate,remove,id:ensurePanelState(specs[0]).id,panel});}
 }
 function rememberCustomAxes(div,event) {
   if(div.layout.meta?.kind!=='custom')return;

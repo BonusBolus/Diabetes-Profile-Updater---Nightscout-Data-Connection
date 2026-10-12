@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from custom_graph import custom_bundle
-from garmin_charts import activity_shapes
+from garmin_charts import activity_shapes, SLEEP_DAY_HEIGHT
 from nightscout_charts import graph_figures, hourly_figure, date_label
 from report_stats import report_range, observed_stats, day_window
 
@@ -49,10 +49,13 @@ def overview(stats,unit):
     return html
 
 
-def statistics_pages(stats,unit):
+def statistics_pages(stats,unit,layout='landscape'):
     result=[]
-    for offset in range(0,len(stats['daily']),15):
-        rows=stats['daily'][offset:offset+15]
+    # Distribution bars give these rows more height than plain text tables.
+    # Leave room for wrapped headers and the explanatory note on A4 pages.
+    page_size=15 if layout=='portrait' else 12
+    for offset in range(0,len(stats['daily']),page_size):
+        rows=stats['daily'][offset:offset+page_size]
         body='<table><thead><tr>'+''.join('<th>'+h+'</th>' for h in ['Date','Distribution','Below 4','4–10','Above 10','Readings','Coverage','Mean','SD','25%','Median','75%','Bolus U','Carbs g'])+'</tr></thead><tbody>'
         for r in rows:
             values=[r['date'],distribution_bar(r),fmt(r['own_below'])+'%',fmt(r['own_within'])+'%',fmt(r['own_above'])+'%',str(r['readings']),fmt(r['coverage'])+'%',fmt(r['mean']),fmt(r['sd']),fmt(r['q25']),fmt(r['median']),fmt(r['q75']),fmt(r['bolus'],3),fmt(r['carbs'],0)]
@@ -127,24 +130,34 @@ def graph_bundle(loaded,nav,config,days,window,mode,job_id):
     figs=graph_figures(profile,loaded,days,mode,nav['layers'],nav['unit'],False,overlay=overlay,data_only=nav.get('data_only',False))
     raw=[json.loads(f.to_json()) for f in figs]
     custom_ids=config.get('customVisible',nav.get('custom_ids'))
-    state=deepcopy(config)
-    navigation=dict(state_scope='report-'+job_id,config_revision=1,saved_config=state,report_render=dict(id=job_id,range=window),
+    state=deepcopy(config);state['defaultMode']=mode
+    # Report section modes are explicit; preserve all independent content/settings
+    # and duplicated panels while applying that section's aggregation.
+    for panel in state.get('panels',[]):panel['mode']=mode
+    from graph_view import figure_identity
+    # A report section has a fixed mode: do not build an unused alternate bank.
+    banks={mode:{figure_identity(f):r for f,r in zip(figs,raw)}} if len(days)>1 else {}
+    chosen={str(d) for d in days}
+    events=[dict(event,intervals=[p for p in event.get('intervals',[]) if p['date'] in chosen])
+            for event in nav.get('profile_events',[]) if event['date'] in chosen or any(p['date'] in chosen for p in event.get('intervals',[]))]
+    navigation=dict(mode_banks=banks,sleep_day_height=SLEEP_DAY_HEIGHT,state_scope='report-'+job_id,config_revision=1,saved_config=state,report_render=dict(id=job_id,range=window),
                     data_only=nav.get('data_only',False),selected=[str(d) for d in days],days=[str(d) for d in days],mode=mode,unit=nav['unit'],
                     layers=nav['layers'],metric=config.get('metric'),profiles=nav.get('profiles',{}),
                     overlay=overlay,overlays={overlay:dict(selected=raw[0],daily=raw[0])},figures=raw,
                     show_targets=config.get('showTargets',True),same_scale=config.get('sameScale',False),
                     custom_ids=custom_ids,custom_catalog=[p['id'] for p in config.get('customPanels',[])],
                     custom=custom_bundle(loaded,days,days,mode,nav['unit'],False,custom_profiles) if 'Custom graph' in nav['layers'] else None,
-                    activity_bands=activity_shapes(loaded,days,'One day'),change_events=nav.get('change_events',[]),profile_events=nav.get('profile_events',[]),
-                    garmin_units=nav.get('garmin_units'),garmin_sleep_notes=nav.get('garmin_sleep_notes',[]),summaries=[],garmin_daily=[],garmin_activities=[])
-    if mode=='Median + band':
+                    automation_notes=[e for e in nav.get('automation_notes',[]) if e['date'] in chosen],
+                    activity_bands=activity_shapes(loaded,days,'One day'),change_events=[e for e in nav.get('change_events',[]) if e['date'] in chosen],profile_events=events,
+                    garmin_units=nav.get('garmin_units'),garmin_sleep_notes=[n for n in nav.get('garmin_sleep_notes',[]) if n['date'] in chosen],summaries=[],garmin_daily=[],garmin_activities=[])
+    if len(set(days))>1 and 'IOB + Boluses' in nav['layers']:
         f=json.loads(hourly_figure(loaded,'bolus',days,False,exclude_smb=True).to_json())
         navigation['bolus_without_smb']=dict(selected=f,daily=f)
     return dict(specs=raw,navigation=navigation)
 
 
 def build_report(loaded,nav,request):
-    from graph_view import viewer_html
+    from graph_view import viewer_html,pack_payload
     from report_config import settings
     request=dict(request,**settings(request))
     days,window=report_range(request,loaded)
@@ -157,7 +170,7 @@ def build_report(loaded,nav,request):
     stats=observed_stats(loaded,days,window,nav['unit']);jobs=[]
     for section in sections:
         if section=='overview':jobs.append(dict(title='Overview',html=overview(stats,nav['unit'])))
-        elif section=='statistics':jobs.extend(statistics_pages(stats,nav['unit']))
+        elif section=='statistics':jobs.extend(statistics_pages(stats,nav['unit'],request['layout']))
         elif section=='profiles':jobs.extend(profile_pages(loaded,days,window))
         elif section=='distribution':jobs.append(dict(title='Distribution of glucose values',figure=histogram(stats,nav['unit']),note='Percent of observed five-minute glucose bins; gaps are excluded. Colors follow the app range (4–10 mmol/L).'))
         else:
@@ -171,7 +184,9 @@ def build_report(loaded,nav,request):
     slot_mm=(210 if portrait else 140)/count
     height=round(width*slot_mm/(176 if portrait else 263))
     for job in jobs:
-        if 'payload' in job:job['payload']['navigation']['report_render'].update(width=width,height=height,compact=count>=3,capacity=count)
+        if 'payload' in job:
+            job['payload']['navigation']['report_render'].update(width=width,height=height,compact=count>=3,capacity=count,note_width=(176 if portrait else 263)*96/25.4)
+            job['payload']=pack_payload(job['payload'])
     # Template is bundled once, reused in a sequential offscreen renderer. The
     # ordinary viewer remains untouched and all existing graph transforms run.
     template=viewer_html([go.Figure()],False,None)
@@ -182,5 +197,6 @@ def build_report(loaded,nav,request):
     script=Path(__file__).with_name('report_document.js').read_text(encoding='utf-8')
     css=Path(__file__).with_name('report_document.css').read_text(encoding='utf-8')
     css+=f'@page{{size:A4 {request["layout"]};}}'
-    if portrait:css+=':root{--page-width:190mm;--page-height:277mm;--body-height:230mm;--chart-height:210mm}.page h1{font-size:20px}.page table{font-size:10px}.page th{font-size:9px}.page td,.page th{padding:5px 3px}'
+    if count>=5:css+='.page h1{font-size:16px}.page .subtitle{margin-bottom:6px;padding-bottom:5px}'
+    if portrait:css+=':root{--page-width:190mm;--page-height:277mm;--body-height:230mm;--chart-height:210mm}.page h1{font-size:'+str(16 if count>=5 else 20)+'px}.page table{font-size:10px}.page th{font-size:9px}.page td,.page th{padding:5px 3px}'
     return '<!doctype html><html><head><meta charset="utf-8"><title>'+escape(title)+'</title><style>'+css+'</style></head><body><header class="screen"><strong>'+escape(title)+'</strong> <span id="progress">Preparing charts…</span><button id="print" disabled>Print / Save as PDF</button><p>Use the selected A4 orientation and disable browser headers/footers in the print dialog. Charts are generated locally; this document contains health data.</p></header><main id="pages"></main><iframe id="renderer" title="Report chart renderer"></iframe><script>const report='+json.dumps(info,ensure_ascii=False,allow_nan=False).replace('<','\\u003c')+';</script><script>'+script+'</script></body></html>'

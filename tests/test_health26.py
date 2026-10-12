@@ -66,9 +66,9 @@ class Health26Tests(unittest.TestCase):
 
     def test_profile_labels_and_event_button_feedback(self):
         code=(Path(__file__).parents[1]/'garmin_view.js').read_text()
-        source=code[code.index('async function changeEventOption'):]
+        source=code[code.index('function eventAllowed'):code.index('function eventScopeControl')]+code[code.index('async function changeEventOption'):]
         context="""const assert=require('assert');
-let ready=true,syncing=false,changeScope='glucose',eventOptions={profiles:false,percentage:false},dateCycled=false;
+let ready=true,syncing=false,eventScopes={profiles:'off',percentage:'off'},dateCycled=false;
 let card={},feedback=0,draws=0;function clearHover(){}function controls(){feedback++;}async function redrawLocal(){draws++;}
 function enqueue(fn){return fn();}
 const selectedDays=['2026-09-16'];const navigation={mode:'One day',profile_events:[
@@ -76,10 +76,10 @@ const selectedDays=['2026-09-16'];const navigation={mode:'One day',profile_event
 {name:'Standard',percentage:80,date:selectedDays[0],minute:5,intervals:[]},
 {name:'Drinking',percentage:90,date:selectedDays[0],minute:100,intervals:[]}]};
 """
-        check="""(async()=>{await changeEventOption('profiles',true);assert(eventOptions.profiles);assert.equal(feedback,2);assert.equal(draws,1);assert(!syncing);
+        check="""(async()=>{await changeEventOption('profiles','all');assert.equal(eventScopes.profiles,'all');assert.equal(feedback,2);assert.equal(draws,1);assert(!syncing);
 const view={layout:{shapes:[],annotations:[],meta:{}}};applyProfileEvents(view);applyProfileEvents(view);
-assert.equal(view.layout.shapes.length,3);assert.equal(view.layout.annotations.length,2);
-assert(view.layout.annotations.every(a=>/^\\d+%$/.test(a.text)));
+assert.equal(view.layout.shapes.length,3);assert.equal(view.layout.annotations.length,6);
+assert(view.layout.annotations.filter(a=>a.y>1).every(a=>/^\\d+%$/.test(a.text)));assert(view.layout.annotations.filter(a=>a.y<0).every(a=>['Standard','Drinking'].includes(a.text)));assert(view.data.every(t=>t.meta.kind==='profile_event'));
 const legends=view.layout.shapes.filter(s=>s.showlegend);assert.equal(legends.length,2);
 assert.notEqual(legends[0].line.dash,legends[1].line.dash);
 })().catch(e=>{console.error(e);process.exit(1)});"""

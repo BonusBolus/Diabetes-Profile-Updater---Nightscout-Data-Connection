@@ -29,7 +29,7 @@ async function harness(hidden=false) {
   if(kind==='new')plots.push(div);else reacts++;
   active.delete(div);div.handlers.plotly_afterplot?.();
  }
- const context={document,Number,String,Promise,Set,Math,JSON,requestAnimationFrame:f=>setImmediate(f),
+ const context={window:{addEventListener(){},parent:{postMessage(){}}},document,Number,String,Promise,Set,Math,JSON,requestAnimationFrame:f=>setImmediate(f),
   ResizeObserver:class{constructor(callback){observers.push(callback);}observe(){}},
   IntersectionObserver:class{constructor(callback){intersections.push(callback);}observe(){setImmediate(()=>intersections.forEach(f=>f([{isIntersecting:!hidden}])));}},
   Plotly:{purge:div=>{plots=plots.filter(p=>p!==div);},newPlot:(div,data,layout)=>render(div,data,layout,'new'),react:(div,data,layout)=>render(div,data,layout,'react'),
@@ -110,7 +110,7 @@ async function harness(hidden=false) {
    assert.equal(bars.y[h],median);
  }
  await smbButton.handlers.click();await settle();assert.equal(JSON.stringify(bolus.data),allBolus);
- assert.equal(plots[0].layout.height,250);assert(plots.slice(1).every(p=>p.layout.height>=285));
+ assert.equal(plots[0].layout.height,250);assert(plots.slice(1).every(p=>p.layout.meta?.kind==='hourly' && !p.layout.meta.daily_grid?p.layout.height===280:p.layout.height>=285));
  assert(plots.every(p=>p.layout.shapes.some(s=>s.name==='Profile change' && s.x0===600)));
  const variablePanel=plots.find(p=>p.layout.meta?.dataset==='variable_sens');
  assert.equal(variablePanel.layout.yaxis.title.text,'mmol/L/U');
@@ -140,7 +140,7 @@ async function harness(hidden=false) {
  await smbButton.handlers.click();await settle();
  await ids['next-day'].handlers.click();await settle();
  assert(bolus.layout.title.text.includes('no SMB'));assert.equal(bolus.data[0].y.length,1);
- assert(hourlyToggle.disabled);assert.equal(hourlyToggle.textContent,'Bars: selected day');
+ assert(hourlyToggle.disabled);assert.equal(hourlyToggle.textContent,'Hourly bars: selected day');
  assert(custom.layout.title.text.includes('2026-09-16'));
  assert(custom.data.some(t=>t.meta?.kind==='carbs' && t.y.includes(30)));
  assert(!custom.data.some(t=>t.type==='bar'));

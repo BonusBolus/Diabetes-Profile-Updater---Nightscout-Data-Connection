@@ -2,10 +2,13 @@
 from html import escape
 from collections import Counter
 import math
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from garmin_data import METRICS, STAGES, SLEEP_AXIS, metric_unit
 
+# Pixels per recorded date in a multi-day sleep timeline. Shared with the viewer.
+SLEEP_DAY_HEIGHT=28
 
 def _rgba(color,opacity):
     return f'rgba({int(color[1:3],16)},{int(color[3:5],16)},{int(color[5:7],16)},{opacity})'
@@ -60,7 +63,7 @@ def sleep_probabilities(frame,days,zone):
 
 
 def hourly_sleep_distribution(frame,days,zone):
-    """Average minutes/hour across dates with known stage intervals.
+    """Hourly stage durations across dates with known stage intervals.
 
     Dates without any stage data are excluded, rather than declared awake.
     Within included dates, hours with no recorded sleep contribute zero.
@@ -84,6 +87,16 @@ def hourly_sleep_distribution(frame,days,zone):
     asleep=per.drop(columns=['awake'],errors='ignore').sum(axis=1)
     asleep=asleep.reindex(pd.MultiIndex.from_product([sorted(recorded),range(24)],names=['day','hour']),fill_value=0)
     result.attrs['median']=asleep.groupby('hour').median().tolist()
+    # A stack of independent stage medians can exceed an hour, or become all
+    # zero despite everyone sleeping. Split the median total by the observed
+    # asleep-stage mix instead, and identify that composition in the hover.
+    mix=result.drop(columns=['awake'],errors='ignore')
+    mix=mix.div(mix.sum(axis=1).replace(0,np.nan),axis=0).fillna(0)
+    median=mix.mul(result.attrs['median'],axis=0)
+    if 'awake' in per:
+        awake=per.awake.reindex(asleep.index,fill_value=0)
+        median['awake']=awake.groupby('hour').median().reindex(range(24),fill_value=0)
+    result.attrs['median_stages']=median.to_dict('list')
     return result,len(recorded)
 
 
@@ -99,24 +112,32 @@ def garmin_traces(key,loaded,days,mode):
             if stage not in stats:continue
             _,name,c=STAGES[stage]
             traces.append(go.Bar(x=[x+2.5 for x in stats.index],y=stats[stage].tolist(),base=base.tolist(),width=5,
-                name=name,marker_color=c,customdata=[counts.get(x,0) for x in stats.index],
+                name=name,offsetgroup='sleep-stage',marker_color=c,customdata=[counts.get(x,0) for x in stats.index],
                 meta=dict(kind='median',dataset=key,label=name+' · observed dates',unit='%',sleep_variant='stages',legend_entry=True),
                 hovertemplate='%{y:.1f}% · %{customdata} recorded dates<extra>'+name+'</extra>'))
             base=base+stats[stage].fillna(0)
         hourly,denominator=hourly_sleep_distribution(frame,days,zone)
-        base=pd.Series(0.,index=hourly.index)
-        for stage in ('deep_sleep','light_sleep','rem_sleep'):
+        # One real hourly stack, with explicit common positions and bases.
+        # Do not repeat each hour's statistic as twelve adjacent five-minute bars.
+        minutes=list(range(0,1440,60));base=[0.]*len(minutes)
+        for stage in ('deep_sleep','light_sleep','rem_sleep','awake'):
             if stage not in hourly:continue
-            _,name,c=STAGES[stage]
-            traces.append(go.Bar(x=[h*60+30 for h in hourly.index],y=hourly[stage].tolist(),base=base.tolist(),width=56,
-                name=name,marker_color=c,customdata=[denominator]*24,
-                meta=dict(kind='sleep_distribution',dataset=key,label=name+' · hourly average',unit='min/hour',sleep_variant='hourly',aggregation='Average',legend_entry=True),
-                hovertemplate='%{y:.1f} min/hour · %{customdata} recorded dates<extra>'+name+'</extra>'))
-            base=base+hourly[stage].fillna(0)
-        traces.append(go.Bar(x=[h*60+30 for h in range(24)],y=hourly.attrs.get('median',[0]*24),width=56,
-            name='Median sleep',marker_color='#9270cf',customdata=[denominator]*24,
-            meta=dict(kind='sleep_distribution',dataset=key,label='Median sleep · hourly',unit='min/hour',sleep_variant='hourly',aggregation='Median',legend_entry=True),
-            hovertemplate='%{y:.1f} min/hour · %{customdata} recorded dates<extra>Median sleep</extra>'))
+            _,name,c=STAGES[stage];values=[float(hourly.loc[x//60,stage])/60 for x in minutes]
+            traces.append(go.Bar(x=[x+30 for x in minutes],y=values,base=base,width=54,offsetgroup='sleep-stage',
+                name=name,marker_color=c,customdata=[denominator]*len(minutes),
+                meta=dict(kind='sleep_distribution',dataset=key,label=name+' · hourly average',unit='h/hour',sleep_variant='hourly',aggregation='Average',legend_entry=True),
+                hovertemplate='%{y:.3g} h per clock hour · %{customdata} recorded dates<extra>'+name+'</extra>'))
+            base=[a+b for a,b in zip(base,values)]
+        base=[0.]*len(minutes)
+        for stage in ('deep_sleep','light_sleep','rem_sleep','awake'):
+            if stage not in hourly.attrs['median_stages']:continue
+            _,name,c=STAGES[stage];values=[v/60 for v in hourly.attrs['median_stages'][stage]]
+            detail='Median awake duration' if stage=='awake' else 'Median asleep duration × recorded stage share'
+            traces.append(go.Bar(x=[x+30 for x in minutes],y=values,base=base,width=54,offsetgroup='sleep-stage',
+                name=name,marker_color=c,customdata=[denominator]*len(minutes),
+                meta=dict(kind='sleep_distribution',dataset=key,label=name+' · median hourly sleep',unit='h/hour',sleep_variant='hourly',aggregation='Median',legend_entry=True),
+                hovertemplate='%{y:.3g} h per clock hour · %{customdata} recorded dates<br>'+detail+'<extra>'+name+'</extra>'))
+            base=[a+b for a,b in zip(base,values)]
         return traces
     if key in ('g_sleep','g_activity'):
         # Activities are categorical intervals, never averaged as numeric amounts.

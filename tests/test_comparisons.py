@@ -72,7 +72,7 @@ class ComparisonTests(unittest.TestCase):
         days=[loaded['first'],loaded['last']]
         profile=go.Figure(go.Scatter(x=[0,1440],y=[9,10],name='LenStandardV17'))
         figs=graph_figures(profile,loaded,days,'Multiple days',['IOB + Boluses','COB + Carbs','Temporary Targets'],'mmol/L',True)
-        for fig in figs[1:]:
+        for fig in [f for f in figs[1:] if (f.layout.meta or {}).get('kind')!='hourly']:
             self.assertEqual(sum(bool(t.showlegend) for t in fig.data),1 if fig.layout.title.text.startswith('Temp targets') else 2)
             for trace in fig.data:
                 self.assertNotIn('2026-',trace.name)

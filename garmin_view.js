@@ -19,10 +19,10 @@ function configureSmoothingSlider(slider,seconds){
   slider.addEventListener('blur',()=>{slider.editing=false;});
 }
 
-function changeActivityOption(key,option,value) {
-  return changeGarminOption('activity',()=>({...garminOptions.activity,[key]:{...activityOptions(key),[option]:value}}),key);
+function changeActivityOption(key,option,value,id=null) {
+  return changeGarminOption('activity',()=>({...graphOptions(id).activity,[key]:{...activityOptions(key,graphOptions(id)),[option]:value}}),key,id);
 }
-function smoothingControl(bar,key) {
+function smoothingControl(bar,key,id=null) {
   const label=document.createElement('label'),slider=document.createElement('input'),value=document.createElement('span');
   const stress=key==='g_stress';
   if(stress){slider.type='range';slider.min='1';slider.max='30';slider.step='1';slider.value='5';slider.style.width='160px';}
@@ -31,15 +31,16 @@ function smoothingControl(bar,key) {
   slider.setAttribute('aria-label',(key==='g_stress'?'Stress':key.replace('g_workout_','Activity '))+' smoothing time constant in '+(stress?'minutes':'seconds'));
   slider.title=stress?'1–30 minutes; higher values smooth more.':'5 seconds–30 minutes; higher values smooth more. Gaps reset the filter.';
   slider.addEventListener('input',()=>{slider.editing=true;value.textContent='Smoothing: '+smoothingLabel(stress?Number(slider.value)*60:smoothingSeconds(slider));});
-  slider.addEventListener('change',()=>{const seconds=stress?Number(slider.value)*60:smoothingSeconds(slider);slider.editing=false;return stress?changeGarminOption('stressTau',seconds/60):changeActivityOption(key,'tauSeconds',seconds);});
+  slider.addEventListener('change',()=>{const seconds=stress?Number(slider.value)*60:smoothingSeconds(slider);slider.editing=false;return stress?changeGarminOption('stressTau',seconds/60,null,id):changeActivityOption(key,'tauSeconds',seconds,id);});
   label.appendChild(value);label.appendChild(slider);bar.appendChild(label);
-  (key==='g_stress'?stressSliders:activitySliders).push({slider,value,key});
+  (key==='g_stress'?stressSliders:activitySliders).push({slider,value,key,id});
 }
 function activityGraphControls(bar,spec,axisControls) {
+  const id=spec.layout.meta.panel_id;
   const key=spec.layout.meta.dataset;
   const button=document.createElement('button');button.type='button';button.textContent='Low-pass';
-  button.addEventListener('click',()=>changeActivityOption(key,'smooth',!activityOptions(key).smooth));
-  bar.appendChild(button);activityButtons.push({button,key});smoothingControl(bar,key);
+  button.addEventListener('click',()=>changeActivityOption(key,'smooth',!activityOptions(key,graphOptions(id)).smooth,id));
+  bar.appendChild(button);activityButtons.push({button,key,id});smoothingControl(bar,key,id);
   if(!activityFloorSignals.includes(key))return;
   const label=document.createElement('label'),slider=document.createElement('input'),value=document.createElement('span');
   const unit=key==='g_workout_speed'?'km/h':spec.data.find(t=>t.meta?.dataset===key)?.meta.unit || '';
@@ -52,31 +53,31 @@ function activityGraphControls(bar,spec,axisControls) {
   slider.title='0 = Auto. Clip the displayed range below this limit; upper scaling remains automatic. Source samples stay unchanged.'+(key==='g_workout_speed'?' Always in km/h; in pace view this clips slow values.':'');
   const caption=v=>'Lower: '+(v>0?v+' '+unit:'Auto');
   slider.addEventListener('input',()=>{value.textContent=caption(Number(slider.value));});
-  slider.addEventListener('change',()=>changeActivityOption(key,'lower',Number(slider.value)));
+  slider.addEventListener('change',()=>changeActivityOption(key,'lower',Number(slider.value),id));
   label.className='axis-floor';slider.className='axis-slider';slider.style.width='22px';slider.style.height='130px';
-  label.appendChild(value);label.appendChild(slider);axisControls.appendChild(label);activityFloors.push({key,slider,value,caption,peak});
+  label.appendChild(value);label.appendChild(slider);axisControls.appendChild(label);activityFloors.push({key,slider,value,caption,peak,id});
 }
 const sleepFields={'g_sleep_movement':'Movement','g_sleep_restless':'Restless moments','g_sleep_respiration':'Respiration','g_sleep_rhr':'Resting heart rate','g_sleep_spo2':'Pulse Ox','g_sleep_rr':'Sleep respiration','g_sleep_hrv':'Overnight HRV'};
 function garminControls(bar,spec) {
   const areas=controlAreas(bar),settings=areas.settings;
-  const key=spec.layout.meta?.dataset;
+  const key=spec.layout.meta?.dataset,id=spec.layout.meta?.panel_id;
   const options=key==='g_stress'?[['stressSmooth','Low-pass'],['stressLine','Line']]:
     key==='g_workout_speed'?[['pace','Pace · min/km']]:[];
   if(key==='g_steps')options.push(['stepsHistogram','Histogram']);
   if(['g_steps','g_stress','g_sleep'].includes(key) && navigation?.mode!=='One day')options.push(['aggregation','Bars: Average']);
-  if(key==='g_stress')smoothingControl(settings,key);
+  if(key==='g_stress')smoothingControl(settings,key,id);
   if(activitySignals.includes(key))activityGraphControls(settings,spec,areas.axis);
   if(key==='g_sleep') {
     options.push(['sleepOverlay','Sleep: Underneath']);
-    if(navigation?.mode==='Median + band')options.push(['sleepDistribution','Hourly sleep distribution']);
+    if(selectedDays.length>1)options.push(['sleepDistribution','Hourly sleep distribution']);
     const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Sleep overlays';details.appendChild(summary);
     const choices=document.createElement('div');choices.className='custom-options';details.appendChild(choices);areas.content.appendChild(details);
     for(const [field,label] of Object.entries(sleepFields)) {
       const button=document.createElement('button');button.type='button';button.textContent=label;
       const available=(spec.layout.meta.sleep_fields || []).includes(field);
       button.title=!available?'No recorded data for this signal':field==='g_sleep_rhr'?'Daily resting heart rate reference over the recorded night; not a time-resolved measurement.':field==='g_sleep_respiration'?'Monitoring respiration recorded inside sleep sessions.':field==='g_sleep_rr'?'Sleep-export respiration where present; monitoring respiration otherwise. These can match Respiration.':'Show '+label.toLowerCase()+' alongside sleep stages.';
-      button.addEventListener('click',()=>changeGarminOption('sleepFields',garminOptions.sleepFields.includes(field)?garminOptions.sleepFields.filter(k=>k!==field):[...garminOptions.sleepFields,field]));
-      choices.appendChild(button);sleepButtons.push({button,field,available});
+      button.addEventListener('click',()=>changeGarminOption('sleepFields',graphOptions(id).sleepFields.includes(field)?graphOptions(id).sleepFields.filter(k=>k!==field):[...graphOptions(id).sleepFields,field],null,id));
+      choices.appendChild(button);sleepButtons.push({button,field,available,id});
     }
   }
   for(const [option,label] of options) {
@@ -88,8 +89,8 @@ function garminControls(bar,spec) {
       option==='stepsHistogram'?'Switch cumulative steps to hourly step increments.':
       option==='aggregation'?'Switch aggregate bars between the average and median of the observed daily values.':
       'Switch km/h and min/km. zero speed has no finite pace.';
-    button.addEventListener('click',()=>changeGarminOption(option,option==='aggregation'?(garminOptions.aggregation==='Average'?'Median':'Average'):!garminOptions[option]));
-    garminButtons.push({button,option,key});settings.appendChild(button);
+    button.addEventListener('click',()=>changeGarminOption(option,option==='aggregation'?(graphOptions(id).aggregation==='Average'?'Median':'Average'):!graphOptions(id)[option],null,id));
+    garminButtons.push({button,option,key,id});settings.appendChild(button);
   }
 }
 function stressColor(v) {return v<=25?'#42a5f5':v<=50?'#ffb74d':v<=75?'#ff8a3d':'#ef5350';}
@@ -105,15 +106,15 @@ function lowPass(xs,ys,tau=garminOptions.stressTau) {
 function transformGarmin(view,index) {
   const panel=view.layout.meta?.dataset,options=displayOptions(view.layout);
   view.data=view.data.filter(t=>!t.meta?.sleep_variant || (t.meta.sleep_variant===(options.sleepDistribution?'hourly':'stages') && (!t.meta.aggregation || t.meta.aggregation===options.aggregation)));
-  if(navigation?.mode==='Median + band' && !dateCycled){
+  if(view.layout.meta?.display_mode==='Median + band' && !dateCycled){
     const sleepAxis=panel==='g_sleep'?view.layout.yaxis:index===0 && currentOverlay==='Garmin · Sleep'?view.layout.yaxis2:null;
-    if(sleepAxis){sleepAxis.range=[0,options.sleepDistribution?60:100];sleepAxis.autorange=false;
-      sleepAxis.title={...sleepAxis.title,text:options.sleepDistribution?options.aggregation+' sleep (min/hour)':'Stage composition (%)'};}
+    if(sleepAxis){sleepAxis.range=[0,options.sleepDistribution?1:100];sleepAxis.autorange=false;
+      sleepAxis.title={...sleepAxis.title,text:options.sleepDistribution?options.aggregation+' sleep (hours)' :'Stage composition (%)'};}
     for(const ref of new Set(view.data.filter(t=>t.meta?.sleep_variant).map(t=>t.yaxis || 'y'))){
       const axis=view.layout['yaxis'+ref.slice(1)];
       const exclusive=view.data.filter(t=>(t.yaxis || 'y')===ref && !t.meta?.legend_proxy).every(t=>t.meta?.dataset==='g_sleep');
-      if(axis && exclusive){axis.range=[0,options.sleepDistribution?60:100];axis.autorange=false;
-        axis.title={...axis.title,text:options.sleepDistribution?options.aggregation+' sleep (min/hour)':'Stage composition (%)'};}
+      if(axis && exclusive){axis.range=[0,options.sleepDistribution?1:100];axis.autorange=false;
+        axis.title={...axis.title,text:options.sleepDistribution?options.aggregation+' sleep (hours)' :'Stage composition (%)'};}
     }
   }
   if(panel==='g_steps'){
@@ -147,7 +148,7 @@ function transformGarmin(view,index) {
     if(key!=='g_stress' || t.meta.kind==='garmin_band')continue;
     if(options.stressSmooth){t.y=lowPass(t.x,t.y,options.stressTau);if(t.meta.label)t.meta.label+=' · '+options.stressTau+'-min low-pass';}
     t.marker={...t.marker,color:t.y.map(v=>Number.isFinite(v)?stressColor(v):'#888'),size:4};
-    if(panel==='g_stress' && t.meta?.kind!=='garmin_band' && !options.stressSmooth && !options.stressLine)makeGarminBar(t,t.marker.color,t.meta.kind==='median'?5:(navigation?.mode==='Multiple days' && selectedDays.length>7)?5:1);
+    if(panel==='g_stress' && t.meta?.kind!=='garmin_band' && !options.stressSmooth && !options.stressLine)makeGarminBar(t,t.marker.color,t.meta.kind==='median'?5:(view.layout.meta?.display_mode==='Multiple days' && selectedDays.length>7)?5:1);
 
   }
   if(panel==='g_workout_speed' && options.pace && ['Metric','Statute'].includes(navigation?.garmin_units))view.layout.title.text=view.layout.title.text.replace('Activity speed','Activity pace');
@@ -171,28 +172,34 @@ function makeGarminBar(t,color,bin) {
   t.type='bar';t.marker={color,line:{width:.5,color}};t.width=bin*1.3;
   delete t.mode;delete t.line;delete t.fill;delete t.fillcolor;delete t.connectgaps;
 }
-async function changeGarminOption(option,value,dataset=null) {
+async function changeGarminOption(option,value,dataset=null,id=null) {
   if(!ready)return;
   return enqueue(async()=>{
-    syncing=true;clearHover();const previous=garminOptions[option];
+    syncing=true;clearHover();const options=graphOptions(id),previous=options[option];
     try{
-      garminOptions[option]=typeof value==='function'?value():value;controls();
+      options[option]=typeof value==='function'?value():value;
+      if(id)garminOptions[option]=option==='activity'?{...garminOptions.activity,...JSON.parse(JSON.stringify(options[option]))}:JSON.parse(JSON.stringify(options[option]));
+      else if(option!=='activityShading')for(const state of panelStates.values())state.garmin[option]=JSON.parse(JSON.stringify(options[option]));
+      controls();
       const key=dataset || (option.startsWith('stress')?'g_stress':option==='stepsHistogram'?'g_steps':null);
-      await redrawLocal(key?(spec,i)=>spec.layout.meta?.kind!=='custom' && (i===0 || spec.data.some(t=>t.meta?.dataset===key)):null);
+      await redrawLocal(id?(spec)=>spec.layout.meta?.panel_id===id:key?(spec,i)=>spec.layout.meta?.kind!=='custom' && (i===0 || spec.data.some(t=>t.meta?.dataset===key)):null);
     }
-    catch(error){garminOptions[option]=previous;card.textContent='Could not change Garmin display.';}
+    catch(error){options[option]=previous;card.textContent='Could not change Garmin display.';}
     finally{syncing=false;controls();}
   });
 }
 function composeSleep(view) {
   if(view.layout.meta?.dataset!=='g_sleep')return;
-  const enabled=garminOptions.sleepFields.filter(k=>(view.layout.meta.sleep_fields || []).includes(k));
+  const options=displayOptions(view.layout);
+  const enabled=options.sleepFields.filter(k=>(view.layout.meta.sleep_fields || []).includes(k) &&
+    view.data.some(t=>t.meta?.dataset===k && t.y?.some(Number.isFinite)));
   view.data=view.data.filter(t=>!t.meta?.sleep_overlay || enabled.includes(t.meta.dataset));
   const dates=[...new Set(view.data.filter(t=>t.meta?.kind==='garmin_sleep').map(t=>t.meta.date))];
-  const stageHeight=Math.max(150,dates.length*86),total=stageHeight+enabled.length*100;
+  const dayHeight=navigation?.sleep_day_height || 28;
+  const stageHeight=Math.max(150,dates.length*dayHeight),total=stageHeight+enabled.length*100;
   for(const name of Object.keys(view.layout))if(/^yaxis[0-9]+$/.test(name))delete view.layout[name];
   view.layout.meta.sleep_details=enabled.length>0;
-  if(garminOptions.sleepOverlay && enabled.length) {
+  if(options.sleepOverlay && enabled.length) {
     view.layout.height=Math.max(350,stageHeight+150);view.layout.yaxis.domain=[0,1];view.layout.xaxis.anchor='y';
     const units=[...new Set(enabled.map(key=>view.data.find(t=>t.meta?.dataset===key)?.meta.unit || ''))];
     customAxisLayout(view.layout,units.length+1);
@@ -219,32 +226,37 @@ function composeSleep(view) {
       for(const t of view.data.filter(t=>t.meta?.dataset===key)){t.yaxis=axis;t.visible=true;}
     });
   }
-  for(const t of view.data.filter(t=>t.meta?.kind==='garmin_sleep'))t.line.width=dates.length<=1?120:86;
+  for(const t of view.data.filter(t=>t.meta?.kind==='garmin_sleep'))t.line.width=dates.length<=1?120:dayHeight*.78;
 }
 function garminControlState() {
-  for(const {button,option,key} of garminButtons){
-    button.setAttribute('aria-pressed',String(option==='aggregation'?garminOptions.aggregation==='Average':garminOptions[option]));
+  for(const {button,option,key,id} of garminButtons){
+    button.setAttribute('aria-pressed',String(option==='aggregation'?graphOptions(id).aggregation==='Average':graphOptions(id)[option]));
     button.disabled=!ready || syncing || (option==='aggregation' && dateCycled) || (key==='g_workout_speed' && !['Metric','Statute'].includes(navigation?.garmin_units));
-    if(option==='activityShading')button.textContent='Activity shading: '+(garminOptions.activityShading?'on':'off');
-    if(option==='sleepOverlay')button.textContent='Sleep: '+(garminOptions.sleepOverlay?'Overlay':'Underneath');
-    if(option==='sleepDistribution')button.textContent=garminOptions.sleepDistribution?'Sleep: hourly distribution':'Sleep: stage composition';
+    
+    if(option==='sleepOverlay')button.textContent='Sleep: '+(graphOptions(id).sleepOverlay?'Overlay':'Underneath');
+    if(option==='sleepDistribution')button.hidden=!dateCycled && (panelStates.get(id)?.mode!=='Median + band') || selectedDays.length<2;
+    if(option==='sleepDistribution')button.textContent=graphOptions(id).sleepDistribution?'Sleep: hourly distribution':'Sleep: stage composition';
     if(option==='aggregation'){
-      button.textContent=dateCycled?'Bars: selected day':'Bars: '+garminOptions.aggregation;
-      if(key==='g_steps')button.hidden=!garminOptions.stepsHistogram;
+      button.textContent=(key==='g_sleep'?'Sleep bars':key==='g_stress'?'Stress bars':'Step bars')+': '+graphOptions(id).aggregation;
+      button.hidden=selectedDays.length<2 || dateCycled || panelStates.get(id)?.mode!=='Median + band';
+      if(key==='g_stress' && (graphOptions(id).stressSmooth || graphOptions(id).stressLine))button.hidden=true;
+      if(key==='g_sleep' && !graphOptions(id).sleepDistribution && !graphOptions(id).sleepFields.includes('g_sleep_restless'))button.hidden=true;
+      if(key==='g_sleep' && !graphOptions(id).sleepDistribution)button.textContent='Restless bars: '+graphOptions(id).aggregation;
+      if(key==='g_steps' && !graphOptions(id).stepsHistogram)button.hidden=true;
     }
   }
-  for(const {slider,value} of stressSliders){if(!slider.editing){slider.value=String(garminOptions.stressTau);value.textContent='Smoothing: '+smoothingLabel(garminOptions.stressTau*60);}slider.disabled=!ready || !garminOptions.stressSmooth;}
-  for(const {button,key} of activityButtons){button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(activityOptions(key).smooth));}
-  for(const {slider,value,key} of activitySliders){const opts=activityOptions(key);setSmoothingValue(slider,opts.tauSeconds);slider.disabled=!ready || !opts.smooth;if(!slider.editing)value.textContent='Smoothing: '+smoothingLabel(opts.tauSeconds);}
-  for(const {slider,value,key,caption,peak} of activityFloors){const opts=activityOptions(key);slider.max=String(Math.max(Number(slider.max),peak,opts.lower));slider.value=String(opts.lower);slider.disabled=!ready || syncing;value.textContent=caption(opts.lower);}
-  for(const {button,field,available} of sleepButtons){button.disabled=!ready || syncing || !available;button.setAttribute('aria-pressed',String(garminOptions.sleepFields.includes(field)));}
+  for(const {slider,value,id} of stressSliders){if(!slider.editing){slider.value=String(graphOptions(id).stressTau);value.textContent='Smoothing: '+smoothingLabel(graphOptions(id).stressTau*60);}slider.disabled=!ready || !graphOptions(id).stressSmooth;}
+  for(const {button,key,id} of activityButtons){button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(activityOptions(key,graphOptions(id)).smooth));}
+  for(const {slider,value,key,id} of activitySliders){const opts=activityOptions(key,graphOptions(id));setSmoothingValue(slider,opts.tauSeconds);slider.disabled=!ready || !opts.smooth;if(!slider.editing)value.textContent='Smoothing: '+smoothingLabel(opts.tauSeconds);}
+  for(const {slider,value,key,caption,peak,id} of activityFloors){const opts=activityOptions(key,graphOptions(id));slider.max=String(Math.max(Number(slider.max),peak,opts.lower));slider.value=String(opts.lower);slider.disabled=!ready || syncing;value.textContent=caption(opts.lower);}
+  for(const {button,field,available,id} of sleepButtons){button.disabled=!ready || syncing || !available;button.setAttribute('aria-pressed',String(graphOptions(id).sleepFields.includes(field)));}
 }
 
 // One rescaling policy for workout panels, profile overlays and custom graphs.
 function workoutAxisUpdates(data,layout,range) {
   const result={},options=displayOptions(layout);
   if(layout.meta?.kind==='custom' && customState(layout.meta.custom_id).sameScale)return result;
-  if(layout.yaxis2 && sameScale && !layout.meta?.dataset && layout.meta?.kind!=='custom')return result;
+  if(layout.yaxis2 && (layout.meta?.profile_copy?layout.meta.profile_same_scale:sameScale) && !layout.meta?.dataset && layout.meta?.kind!=='custom')return result;
   const axes=[...new Set(data.filter(t=>t.meta?.dataset?.startsWith('g_workout_') && t.visible!==false && t.visible!=='legendonly').map(t=>t.yaxis || 'y'))];
   for(const name of axes) {
     const key='yaxis'+name.slice(1),values=[];
@@ -316,30 +328,39 @@ function activityControlState() {
 async function setTimeRange(range) {
   syncing=true;controls();clearHover();
   try{await Promise.all(graphs.filter(g=>!g.layout.meta?.non_time).map(g=>Plotly.relayout(g,{
-    'xaxis.range':range,'xaxis.autorange':false,...workoutAxisUpdates(g.data,g.layout,range)})));}
+    'xaxis.range':range,'xaxis.autorange':false,...workoutAxisUpdates(g.data,g.layout,range)}).then(()=>reflowProfileLabels(g))));}
   finally{syncing=false;controls();}
 }
 
 function activityShadingControl(bar) {
-  if(!bar)return null;
-  const button=document.createElement('button');button.type='button';
-  button.title='Show recorded activity intervals on every time graph. In aggregate views labels include the recorded date; shading is context, not an average activity.';
-  button.addEventListener('click',()=>changeGarminOption('activityShading',!garminOptions.activityShading));
-  bar.appendChild(button);garminButtons.push({button,option:'activityShading',key:'global'});return button;
+  return eventScopeControl(bar,'activity','Shading');
 }
 function applyActivityShading(view) {
   view.layout.shapes=(view.layout.shapes || []).filter(s=>!s.name?.startsWith('Activity | '));
-  if(!garminOptions.activityShading || view.layout.meta?.non_time || view.layout.meta?.kind==='hourly')return;
-  const aggregate=!dateCycled && navigation?.mode==='Median + band';
+  if(!eventAllowed(view,'activity'))return;
+  const aggregate=!dateCycled && view.layout.meta?.display_mode==='Median + band';
   const dated=aggregate || selectedDays.length>1;
   for(const band of navigation?.activity_bands || []){
     const day=band.name.split(' | ')[1];if(!selectedDays.includes(day))continue;
     view.layout.shapes.push({...band,label:{...band.label,text:(dated?day+' · ':'')+(band.label?.text || band.name.split(' | ')[2])}});
   }
+  if(dated){
+    // Identical intervals from different dates must not stack unreadable labels.
+    // Keep every recorded region/color; only combine their coincident labels.
+    const groups=new Map();
+    for(const band of view.layout.shapes.filter(s=>s.name?.startsWith('Activity | '))){
+      const key=band.x0+'|'+band.x1,group=groups.get(key) || [];group.push(band);groups.set(key,group);
+    }
+    for(const group of groups.values())if(group.length>1){
+      const dates=new Set(group.map(s=>s.name.split(' | ')[1])),types=[...new Set(group.map(s=>s.label.text.replace(/^\d{4}-\d{2}-\d{2} · /,'')))];
+      group[0].label.text=types.join(' / ')+' · '+dates.size+(dates.size===1?' date':' dates');
+      for(const band of group.slice(1))band.label.text='';
+    }
+  }
 }
 
 function displayOptions(layout) {
-  return layout.meta?.kind==='custom'?customState(layout.meta.custom_id).garmin:garminOptions;
+  return layout.meta?.kind==='custom'?customState(layout.meta.custom_id).garmin:graphOptions(layout.meta?.panel_id);
 }
 // Open, distinct control boxes: settings left, datasets/annotations right.
 function controlAreas(bar) {
@@ -360,39 +381,55 @@ function settingsGroup(bar,title) {
   const group=document.createElement('div');group.className='settings-group';
   const label=document.createElement('span');label.className='settings-group-title';label.textContent=title;group.appendChild(label);bar.appendChild(group);return group;
 }
-let changeScope='glucose',changeSelect;
-let eventOptions={site:true,sensor:true,profiles:false,percentage:false};
-const eventButtons=[];
+// One independent scope per event type, shared by daily/aggregate/report rendering.
+const eventScopes={site:'glucose',sensor:'glucose',profiles:'off',percentage:'off',automation:'off',activity:'all'};
+const eventSelects=[];
+function eventAllowed(view,key){
+  const scope=eventScopes[key];
+  if(scope==='off' || view.layout.meta?.non_time)return false;
+  const glucose=view.layout.meta?.dataset==='glucose' || (view.data || []).some(t=>t.meta?.kind==='glucose' || t.meta?.dataset==='glucose');
+  return scope==='all' || glucose;
+}
+function restoreEventScopes(s){
+  for(const key of Object.keys(eventScopes)){
+    const legacy=key==='activity'?(s.garmin?.activityShading===false?'off':'all'):key==='automation'?(s.automationScope || 'off'):
+      ['profiles','percentage'].includes(key)?(s.eventOptions?.[key]?'all':'off'):
+      s.eventOptions?.[key]===false?'off':(s.changeScope || 'glucose');
+    const value=s.eventScopes?.[key] ?? legacy;
+    if(['glucose','all','off'].includes(value))eventScopes[key]=value;
+  }
+}
+function eventScopeControl(parent,key,text){
+  const label=document.createElement('label');label.textContent=text;
+  const select=document.createElement('select');select.setAttribute('aria-label',text+' display');
+  for(const [value,caption] of [['off','Off'],['glucose','Glucose only'],['all','All time graphs']]){
+    const option=document.createElement('option');option.value=value;option.textContent=caption;select.appendChild(option);
+  }
+  label.title=key==='automation'?'Only loaded CarePortal notes starting with Automation: are shown. Median views show actual dated events by time of day, not an average execution.':
+    'Recorded events by time of day. Elapsed-time insights and other non-time plots are excluded.';
+  select.addEventListener('change',()=>changeEventOption(key,select.value));label.appendChild(select);parent.appendChild(label);
+  eventSelects.push({key,select});return select;
+}
 function setupChangeControls() {
   const top=document.getElementById('top-graph-controls');
   const bar=top?controlAreas(top).settings:controlAreas(document.getElementById('toolbar-left') || document.getElementById('viewer')).settings;
   const group=settingsGroup(bar,'Events');
-  const label=document.createElement('label');label.textContent='Site / sensor changes';
-  changeSelect=document.createElement('select');changeSelect.setAttribute('aria-label','Site and sensor change markers');
-  for(const [value,text] of [['glucose','Glucose'],['all','All time graphs'],['off','Off']]){
-    const option=document.createElement('option');option.value=value;option.textContent=text;changeSelect.appendChild(option);
-  }
-  changeSelect.addEventListener('change',()=>changeEventOption('scope',changeSelect.value));
-  label.appendChild(changeSelect);group.appendChild(label);
-  for(const [key,text] of [['site','Site'],['sensor','Sensor'],['profiles','Profile switches'],['percentage','Profile % shading']]){
-    const button=document.createElement('button');button.type='button';button.textContent=text;
-    button.title=key==='percentage'?'Recorded effective percentage: blue below 100%, orange above 100%; stronger tint further from 100%. No shading at 100%.':'Recorded events only';
-    if(['profiles','percentage'].includes(key) && !navigation?.profile_events?.length){button.disabled=true;button.title='No effective profile records loaded. Refresh Nightscout to check availability.';}
-    button.setAttribute('aria-pressed',String(eventOptions[key]));
-    button.addEventListener('click',()=>changeEventOption(key,!eventOptions[key]));
-    group.appendChild(button);eventButtons.push({key,button});
+  for(const [key,text] of [['site','Site changes'],['sensor','Sensor changes'],['profiles','Profile switches'],['percentage','Profile % shading'],['automation','Automation notes']])eventScopeControl(group,key,text);
+}
+function eventControlState(){
+  for(const {key,select} of eventSelects){
+    select.value=eventScopes[key];select.disabled=!ready || syncing || (['profiles','percentage'].includes(key) && !navigation?.profile_events?.length);
+    if(['profiles','percentage'].includes(key) && !navigation?.profile_events?.length)select.title='No effective profile records loaded. Refresh Nightscout to check availability.';
   }
 }
 function applyChangeEvents(view,index) {
   view.layout.shapes=(view.layout.shapes || []).filter(s=>!s.name?.startsWith('Change | '));
   view.layout.annotations=(view.layout.annotations || []).filter(s=>!s.name?.startsWith('Change | '));
-  if(changeScope==='off' || view.layout.meta?.non_time || view.layout.meta?.kind==='hourly')return;
-  const glucose=view.layout.meta?.dataset==='glucose' || (index===0 && currentOverlay==='Glucose') || view.data.some(t=>t.meta?.kind==='glucose' || t.meta?.dataset==='glucose');
-  if(changeScope!=='all' && !glucose)return;
+  if(view.layout.meta?.non_time)return;
   for(const event of navigation?.change_events || []){
     if(!selectedDays.includes(event.date))continue;
     const site=event.label==='Site Change',color=site?'#557dce':'#b45bb5';
-    if(!eventOptions[site?'site':'sensor'])continue;
+    if(!eventAllowed(view,site?'site':'sensor'))continue;
     const clock=String(Math.floor(event.minute/60)).padStart(2,'0')+':'+String(Math.floor(event.minute%60)).padStart(2,'0');
     const text=(selectedDays.length>1?event.date+' · ':'')+(site?'Site':'Sensor')+' '+clock;
     const name='Change | '+event.date+' | '+event.label+' | '+event.minute;
@@ -407,34 +444,40 @@ function applyChangeEvents(view,index) {
 async function changeEventOption(key,value){
   if(!ready || syncing)return;
   return enqueue(async()=>{
-    const previous=key==='scope'?changeScope:eventOptions[key];syncing=true;clearHover();
-    try{if(key==='scope')changeScope=value;else eventOptions[key]=value;controls();await redrawLocal();}
-    catch(error){if(key==='scope')changeScope=previous;else eventOptions[key]=previous;card.textContent='Could not update event display.';}
+    const previous=eventScopes[key];syncing=true;clearHover();
+    try{eventScopes[key]=value;controls();await redrawLocal();}
+    catch(error){eventScopes[key]=previous;card.textContent='Could not update event display.';}
     finally{syncing=false;controls();}
   });
 }
 function profileLineStyle(name){
   // Stable by base name, including unseen profiles; percentages share its line style.
-  const dashes=['solid','dash','dot','dashdot','longdash','longdashdot'];
+  const dashes=['dash','longdash','dashdot','longdashdot'];
   const names=[...new Set((navigation?.profile_events || []).map(e=>e.name))].sort();
-  return {color:'#7774a8',width:1.25,dash:dashes[names.indexOf(name)%dashes.length]};
+  return {color:'#a173cb',width:1.35,dash:dashes[names.indexOf(name)%dashes.length]};
 }
 function applyProfileEvents(view) {
   view.layout.shapes=(view.layout.shapes || []).filter(s=>!s.name?.startsWith('Effective | ') && !s.name?.startsWith('Profile · '));
   view.layout.annotations=(view.layout.annotations || []).filter(s=>!s.name?.startsWith('Effective | '));
-  if(view.layout.meta?.non_time || view.layout.meta?.kind==='hourly')return;
-  const seen=new Set(),labels=[];
+  if(view.layout.meta?.non_time)return;
+  const seen=new Set();
+  view.data=(view.data || []).filter(t=>t.meta?.kind!=='profile_event');
+  const aux=1+Math.max(1,...Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k)).map(k=>Number(k.slice(5)) || 1));
+  const eventAxis='y'+aux;
   const events=(navigation?.profile_events || []).filter(e=>selectedDays.includes(e.date)).sort((a,b)=>a.minute-b.minute);
+  view.layout.meta={...view.layout.meta,profile_label_levels:0,percentage_max:100};
   for(const event of navigation?.profile_events || []){
     const p=event.percentage,text=event.name+(Number.isFinite(p)?' · '+p+'%':'');
     const name='Effective | '+event.date+' | '+event.minute+' | '+text;
-    if(eventOptions.percentage && Number.isFinite(p) && p!==100 && !(navigation?.mode==='Median + band' && !dateCycled)){
-      const rgb=p<100?'65,130,205':'225,125,45',alpha=.04+.10*Math.min(1,Math.abs(p-100)/100);
-      for(const part of event.intervals || [])if(selectedDays.includes(part.date))view.layout.shapes.push({type:'rect',name:name+' | '+part.date,xref:'x',yref:'paper',x0:part.start,x1:part.end,y0:0,y1:1,line:{width:0},fillcolor:'rgba('+rgb+','+alpha+')',layer:'below'});
+    if(eventAllowed(view,'percentage') && Number.isFinite(p) && p!==100){
+      for(const part of event.intervals || [])if(selectedDays.includes(part.date)){
+        view.layout.meta.percentage_max=Math.max(view.layout.meta.percentage_max,p);
+        view.layout.shapes.push({type:'rect',name:name+' | '+part.date,xref:'x',yref:'paper',x0:part.start,x1:part.end,y0:0,y1:Math.max(0,p/100),line:{width:0},fillcolor:'rgba(153,102,204,.14)',layer:'below'});
+      }
     }
   }
-  // Actual switches have no meaningful time on a median; use the percentage distribution instead.
-  if(!eventOptions.profiles || navigation?.mode==='Median + band' && !dateCycled)return;
+  // Aggregate views retain actual dated events as context, never average switches.
+  if(!eventAllowed(view,'profiles')){profileEventLayout(view.layout);return;}
   for(const event of events){
     const p=event.percentage,text=event.name+(Number.isFinite(p)?' · '+p+'%':'');
     const name='Effective | '+event.date+' | '+event.minute+' | '+text,line=profileLineStyle(event.name);
@@ -445,12 +488,81 @@ function applyProfileEvents(view) {
     view.layout.shapes.at(-1).legendgroup='Profile · '+event.name;
     if(!seen.has(event.name))view.layout.shapes.at(-1).name='Profile · '+event.name;
     seen.add(event.name);
-    if(!Number.isFinite(p))continue;
-    // Reserve one short annotation per 25 clock minutes; close switches retain their lines.
-    if(labels.some(x=>Math.abs(x-event.minute)<25))continue;
-    labels.push(event.minute);
-    view.layout.annotations.push({name,xref:'x',yref:'paper',x:event.minute,y:1.015,
-      text:p+'%',hovertext:event.date+' · '+text,showarrow:false,xanchor:'center',yanchor:'bottom',font:{size:10,color:line.color}});
+    view.layout['yaxis'+aux]={overlaying:'y',range:[0,1],autorange:false,visible:false,fixedrange:true,showgrid:false};
+    view.data.push({type:'scatter',x:Array(51).fill(event.minute),y:Array.from({length:51},(_,i)=>i/50),yaxis:eventAxis,mode:'lines',line:{color:'rgba(161,115,203,.01)',width:10},showlegend:false,
+      meta:{kind:'profile_event',label:event.name,percentage:p,date:event.date,legend_entry:false},hovertemplate:event.name+'<extra></extra>'});
+    view.layout.annotations.push({name,xref:'x',yref:'paper',x:event.minute,y:-.001,text:(selectedDays.length>1?event.date+' · ':'')+event.name,showarrow:false,yanchor:'top',font:{size:10,color:line.color}});
+    if(Number.isFinite(p))view.layout.annotations.push({name,xref:'x',yref:'paper',x:event.minute,y:1.015,
+      text:p+'%',hovertext:event.date+' · '+text,showarrow:false,yanchor:'bottom',font:{size:10,color:line.color}});
   }
   if(seen.size)view.layout.showlegend=true;
+  profileEventLayout(view.layout);
+}
+
+function profileEventLayout(layout,plotWidth=null){
+  // Recompute at the final plot width, including resize, expanded view and PDF.
+  // Compare full text boxes rather than just the distance between event times.
+  const range=layout.xaxis?.range || [0,1440],span=range[1]-range[0];
+  const width=Math.max(100,plotWidth || (layout.width || 1000)-(layout.margin?.l || 62)-(layout.margin?.r || 62));
+  const labels=(layout.annotations || []).filter(a=>a.name?.startsWith('Effective | ') && a.y<0 && a.x>=range[0] && a.x<=range[1]).sort((a,b)=>a.x-b.x);
+  const lanes=[],percentages=new Map((layout.annotations || []).filter(a=>a.name?.startsWith('Effective | ') && a.y>1).map(a=>[a.name,a]));
+  for(const label of labels){
+    const size=Math.max(label.text.length*(label.font?.size || 10)*.65,36)+14;
+    const center=(label.x-range[0])*width/span;
+    let left=Math.max(0,Math.min(width-size,center-size/2));
+    let lane=lanes.findIndex(end=>left>=end);
+    if(lane<0 && lanes.length>=3){
+      lane=lanes.indexOf(Math.min(...lanes));left=Math.max(left,lanes[lane]);
+      if(left+size>width)lane=-1;
+    }
+    if(lane<0){lane=lanes.length;lanes.push(0);left=Math.max(0,Math.min(width-size,center-size/2));}
+    lanes[lane]=left+size;
+    label.xanchor='left';label.xshift=left-center+7;label.yshift=-28-lane*18;
+    const percent=percentages.get(label.name);
+    if(percent){percent.xanchor='left';percent.xshift=label.xshift;percent.yshift=lane*16;}
+  }
+  layout.meta={...layout.meta,profile_label_levels:lanes.length};
+  const levels=layout.meta?.profile_label_levels || 0,overflow=Math.max(0,(layout.meta?.percentage_max || 100)/100-1);
+  if(!levels && !overflow)return;
+  const bottom=Math.max(layout.margin?.b || 0,levels?64+Math.max(0,levels-1)*18:62);
+  const baseTop=Math.max(36,levels?45+Math.max(0,levels-1)*16:36);
+  const room=Math.max(40,(layout.height || 350)-bottom-baseTop);
+  // Above-100% shade belongs in dedicated headroom, never over the title.
+  layout.margin={...layout.margin,b:bottom,t:baseTop+Math.ceil(room*overflow/(1+overflow))};
+  profileEventLegendPosition(layout);
+}
+function profileEventLegendPosition(layout){
+  if(!(layout.annotations || []).some(a=>a.name?.startsWith('Effective | ') && a.y<0))return;
+  const height=Math.max(40,(layout.height || 350)-(layout.margin?.t || 36)-(layout.margin?.b || 65));
+  const levels=layout.meta?.profile_label_levels || 1;
+  layout.legend={...layout.legend,y:-(45+Math.max(0,levels-1)*18)/height,yanchor:'top'};
+}
+
+async function reflowProfileLabels(div){
+  if(!(div.layout.annotations || []).some(a=>a.name?.startsWith('Effective | ') && a.y<0))return;
+  const width=div._fullLayout?.xaxis?._length;
+  if(!Number.isFinite(width))return;
+  // Automargins and multiple axes can reduce the real plot width after layout.
+  const layout=JSON.parse(JSON.stringify(div.layout));profileEventLayout(layout,width);
+  if(JSON.stringify(layout.annotations)===JSON.stringify(div.layout.annotations))return;
+  await Plotly.relayout(div,{annotations:layout.annotations,margin:layout.margin,legend:layout.legend,meta:layout.meta});
+}
+
+function applyAutomationNotes(view,index){
+  view.data=(view.data || []).filter(t=>t.meta?.kind!=='automation_note');
+  if(!eventAllowed(view,'automation'))return;
+  const events=(navigation?.automation_notes || []).filter(e=>selectedDays.includes(e.date));
+  if(!events.length)return;
+  const aux=1+Math.max(1,...Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k)).map(k=>Number(k.slice(5)) || 1));
+  // Plotly hides out-of-range marker points even with cliponaxis:false.
+  // Reserve a small real axis strip above the data instead of drawing outside it.
+  for(const key of Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k))){const axis=view.layout[key];if(!axis.overlaying)axis.domain=(axis.domain || [0,1]).map(v=>v*.90);}
+  for(const shape of view.layout.shapes || [])if(shape.yref==='paper'){shape.y0*=.90;shape.y1*=.90;}
+  for(const annotation of view.layout.annotations || [])if(annotation.yref==='paper' && annotation.y>=0 && annotation.y<=1)annotation.y*=.90;
+  view.layout['yaxis'+aux]={anchor:'x',domain:[.93,1],range:[0,1],autorange:false,visible:false,fixedrange:true,showgrid:false};
+  const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  for(const [i,e] of events.entries())view.data.push({type:'scatter',x:[e.minute],y:[.25+(i%2)*.5],yaxis:'y'+aux,mode:'markers',cliponaxis:false,
+    marker:{symbol:'diamond',size:7,color:'#44a6a1',line:{width:.7,color:view.layout.plot_bgcolor}},name:'Automation notes',legendgroup:'automation-notes',showlegend:i===0,
+    meta:{kind:'automation_note',label:e.label,date:e.date,legend_entry:i===0},hovertemplate:safe(e.label)+'<extra></extra>'});
+  view.layout.margin={...view.layout.margin,t:Math.max(view.layout.margin?.t || 0,44)};view.layout.showlegend=true;
 }

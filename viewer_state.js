@@ -1,22 +1,24 @@
 // Retain local graph navigation when Streamlit rebuilds an iframe after layer changes.
 const storageKey='profile-studio-view:'+navigation?.state_scope;
 const dateRequest=JSON.stringify([navigation?.selected,navigation?.mode,navigation?.date_revision]);
+let appliedRestoreRevision=0;
 function panelIdentity(index) {
-  const s=specs[index];if(s.layout.meta?.kind==='custom')return 'custom:'+s.layout.meta.custom_id;return (s.layout.meta?.kind || '')+':'+(s.layout.meta?.dataset || s.layout.title.text.split(' · ')[0]);
+  const s=specs[index];if(s.layout.meta?.kind==='custom')return 'custom:'+s.layout.meta.custom_id;return s.layout.meta?.panel_id || sourceIdentity(s);
 }
 function viewerSettings() {
-  return {overlay:currentOverlay,sameScale,metric:currentMetric,showTargets,excludeSMB,changeScope,eventOptions,
-    customPanels:[...dormantCustomPanels,...[...customStates.values()].map(serializeCustom)],customVisible:[...customStates.keys()],hourlyModes,
-    order:panelOrder.map(panelIdentity),garmin:garminOptions};
+  return {overlay:currentOverlay,sameScale,metric:currentMetric,showTargets,excludeSMB,eventScopes:{...eventScopes},
+    customPanels:[...dormantCustomPanels,...originalCustomStates().map(serializeCustom)],customVisible:originalCustomStates().map(s=>s.id),hourlyModes,
+    order:panelOrder.map(panelIdentity),panels:[...dormantPanelStates,...specs.map((spec,i)=>({...panelStateAt(i),...(spec.layout.meta?.kind==='custom'?{custom:serializeCustom(customState(spec.layout.meta.custom_id))}:{})}))],garmin:garminOptions};
 }
 function persistViewer() {
   if(navigation?.report_render)return;
-  try {sessionStorage.setItem(storageKey,JSON.stringify({dateRequest,selectedDays,dateCycled,
+  try {sessionStorage.setItem(storageKey,JSON.stringify({dateRequest,selectedDays,dateCycled,restoreRevision:appliedRestoreRevision,
     configRevision:navigation?.config_revision,viewer:viewerSettings()}));} catch(_) { /* Browser storage may be disabled. */ }
 }
 function restoreViewer() {
   let state=null;
   try {if(!navigation?.report_render)state=JSON.parse(sessionStorage.getItem(storageKey));} catch(_) {}
+  appliedRestoreRevision=state?.restoreRevision || 0;
   if(state?.dateRequest===dateRequest && state?.dateCycled && state.selectedDays?.length===1 && navigation?.days.includes(state.selectedDays[0])) {
     selectedDays=state.selectedDays;dateCycled=true;
   }
@@ -26,8 +28,7 @@ function restoreViewer() {
   const overlayName={'Nightscout targets':'Temporary Targets','Temporary basal':'Temporary Basal','IOB + boluses':'IOB + Boluses','COB + carbs':'COB + Carbs','Variable sensitivity':'Variable Sensitivity'}[s.overlay] || s.overlay?.replace('Garmin · Workout ','Garmin · Activity ');
   if(navigation?.overlays?.[overlayName])currentOverlay=overlayName;
   sameScale=s.sameScale===true;
-  if(['glucose','all','off'].includes(s.changeScope))changeScope=s.changeScope;
-  for(const key of Object.keys(eventOptions))if(typeof s.eventOptions?.[key]==='boolean')eventOptions[key]=s.eventOptions[key];
+  restoreEventScopes(s);
   if(navigation?.profiles?.[s.metric])currentMetric=s.metric;
   showTargets=s.showTargets!==false;excludeSMB=s.excludeSMB===true;
   for(const key of Object.keys(hourlyModes))if(['Average','Median'].includes(s.hourlyModes?.[key]))hourlyModes[key]=s.hourlyModes[key];
@@ -49,8 +50,11 @@ function restoreViewer() {
     restoreCustomPanels([{id:'custom-1',selected:s.custom,sameScale:s.customSameScale,garmin:garminOptions,fieldOptions}]);
   }
   else if(Array.isArray(navigation?.custom_ids))restoreCustomPanels([]);
+  if(!Array.isArray(s.panels))for(const state of panelStates.values()){state.garmin=JSON.parse(JSON.stringify(garminOptions));state.hourly=hourlyModes[state.base.split(':').at(-1)] || 'Average';state.excludeSMB=excludeSMB;state.showTargets=showTargets;if(s.defaultMode)state.mode=s.defaultMode==='Multiple days'?'Multiple days':'Median + band';}
+  restoreGraphPanels(s.panels);
   if(Array.isArray(s.order)) {
     const aliases={':Glucose':':glucose',':Temp basal':':basal',':Temp basal %':':basal_percent',':IOB & boluses':':iob',':Median IOB':':iob',':IOB':':iob',':COB & carbs':':cob',':Median COB':':cob',':COB':':cob',':Temp targets':':target','custom:Custom graph':'custom:custom-1'};
+    aliases['insight:insight_site_after']='insight:insight_site_age';
     const order=s.order.map(id=>aliases[id] || id);
     const rank=i=>{const r=order.indexOf(panelIdentity(i));return r<0?10000:r;};
     panelOrder.sort((a,b)=>rank(a)-rank(b));panelOrder.forEach(i=>panels.appendChild(panelCards[i]));

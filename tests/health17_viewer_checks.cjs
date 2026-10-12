@@ -32,7 +32,7 @@ async function harness(source,hidden=false) {
   active.delete(div);div.handlers.plotly_afterplot?.();
  }
  const sent=[];
- const context={window:{parent:{postMessage:m=>sent.push(m)}},crypto:{randomUUID:()=> 'test-save-event'},sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},document,Number,String,Promise,Set,Math,JSON,requestAnimationFrame:f=>setImmediate(f),
+ const context={window:{addEventListener(){},parent:{postMessage:m=>sent.push(m)}},crypto:{randomUUID:()=> 'test-save-event'},sessionStorage:{getItem:k=>storage.get(k)||null,setItem:(k,v)=>storage.set(k,v)},document,Number,String,Promise,Set,Math,JSON,requestAnimationFrame:f=>setImmediate(f),
   ResizeObserver:class{constructor(callback){observers.push(callback);}observe(){}},
   IntersectionObserver:class{constructor(callback){intersections.push(callback);}observe(){setImmediate(()=>intersections.forEach(f=>f([{isIntersecting:!hidden}])));}},
   Plotly:{toImage:async()=> 'data:image/svg+xml,%3Csvg%20xmlns=%22http://www.w3.org/2000/svg%22/%3E',purge:div=>{plots=plots.filter(p=>p!==div);},newPlot:(div,data,layout)=>render(div,data,layout,'new'),react:(div,data,layout)=>render(div,data,layout,'react'),
@@ -60,7 +60,9 @@ if(require.main===module)(async()=>{
     await run(h,'sleepButtons').find(b=>b.field===field).button.handlers.click();await h.settle();
   }
   assert(sleep.data.some(t=>t.meta?.dataset==='g_sleep_restless' && t.type==='bar'));
-  assert(sleep.data.some(t=>t.meta?.dataset==='g_sleep_hrv'));assert(sleep.layout.yaxis5);
+  assert(sleep.data.some(t=>t.meta?.dataset==='g_sleep_hrv'));assert(sleep.layout.yaxis4);
+  if(i===0)assert(!sleep.layout.yaxis5,'An empty resting-heart-rate signal does not reserve an overlay row');
+  else assert(sleep.layout.yaxis5);
   const button=run(h,'garminButtons').find(b=>b.option==='stressSmooth').button;
   await button.handlers.click();await h.settle();assert(stress.data.every(t=>t.type!=='bar'));
   const slider=run(h,'stressSliders[0].slider');slider.value='20';await slider.handlers.change();await h.settle();
@@ -71,7 +73,7 @@ if(require.main===module)(async()=>{
   if(i>0){
     const step=h.plots.find(p=>p.layout.meta?.dataset==='g_steps');
     if(i===2)assert(step.data.some(t=>t.name==='25–75%' && t.fill==='toself' && t.showlegend));
-    else assert(step.data.every(t=>t.meta.date));
+    else assert(step.data.some(t=>t.name==='Median'),'Multi-day graphs default to Median');
     await run(h,"changeGarminOption('stepsHistogram',true)");await h.settle();
     assert(step.data.every(t=>t.meta.aggregation==='Average'));
     await run(h,'garminButtons').find(b=>b.option==='aggregation').button.handlers.click();await h.settle();

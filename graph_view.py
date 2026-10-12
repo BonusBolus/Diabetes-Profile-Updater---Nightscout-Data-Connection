@@ -8,7 +8,7 @@ from pathlib import Path
 from custom_graph import custom_bundle
 from garmin_data import GARMIN_LAYERS
 from profile_events import profile_events
-from garmin_charts import activity_shapes
+from garmin_charts import activity_shapes, SLEEP_DAY_HEIGHT
 from date_controls import loaded_days
 
 from plotly.offline import get_plotlyjs
@@ -29,7 +29,22 @@ def plotly_script():
     return get_plotlyjs()
 
 
-def navigation_bundle(profile, view, unit, dark, profiles=None, metric=None, custom_profiles=None):
+def figure_identity(figure):
+    meta=figure.layout.meta or {}
+    if not meta.get('dataset') and not meta.get('kind'):return 'profile:settings'
+    return str(meta.get('kind',''))+':'+str(meta.get('dataset') or figure.layout.title.text.split(' · ')[0])
+
+
+def mode_banks(profile,view,unit,dark,initial=None):
+    if len(set(view['days']))<2:return {}
+    result={}
+    for mode in ('Multiple days','Median + band'):
+        figs=initial if initial is not None and mode==view['mode'] else graph_figures(profile,**dict(view,mode=mode),unit=unit,dark=dark)
+        result[mode]={figure_identity(f):json.loads(f.to_json()) for f in figs}
+    return result
+
+
+def navigation_bundle(profile, view, unit, dark, profiles=None, metric=None, custom_profiles=None, initial=None):
     initial_targets=view.get('show_targets',True)
     initial_scale=view.get('same_scale',False)
     custom_ids=view.get('custom_ids');custom_catalog=view.get('custom_catalog')
@@ -37,25 +52,41 @@ def navigation_bundle(profile, view, unit, dark, profiles=None, metric=None, cus
     view=dict(view,show_targets=True,same_scale=False)
     loaded = view['loaded']
     days = loaded_days(loaded)
+    if initial is None:initial=graph_figures(profile,**view,unit=unit,dark=dark)
+    banks=mode_banks(profile,view,unit,dark,initial)
     # One batch of dated traces lets the browser filter locally without an app
     # rerun, which would destroy fullscreen. No tokens or server URLs are sent.
-    daily = graph_figures(profile, **dict(view, days=days, mode='One day',summary_layout=view['mode']=='Median + band'), unit=unit, dark=dark)
+    daily = graph_figures(profile, **dict(view, days=days, mode='One day'), unit=unit, dark=dark)
+    by_id={figure_identity(f):f for f in daily}
+    daily=[by_id.get(figure_identity(f),f) for f in initial]
     overlays = {}
     for option in (['None'] if view.get('data_only') else OVERLAY_CHOICES):
         if option in GARMIN_LAYERS and ('g_steps' if GARMIN_LAYERS[option]=='g_steps_cumulative' else GARMIN_LAYERS[option]) not in loaded["data"]:continue
         options = dict(view, layers=[], overlay=option,profile_only=True)
         # Initial variants preserve median/multiple-day mode; daily variants
         # support local date navigation without requests or leaving fullscreen.
-        initial_top = graph_figures(profile, **options, unit=unit, dark=dark)[0]
+        initial_top = initial[0] if option==view.get('overlay','None') else graph_figures(profile, **options, unit=unit, dark=dark)[0]
         daily_top = daily[0] if option == view.get('overlay', 'None') else graph_figures(
             profile, **dict(options, days=days, mode='One day'), unit=unit, dark=dark)[0]
-        overlays[option] = dict(selected=json.loads(initial_top.to_json()), daily=json.loads(daily_top.to_json()))
+        overlays[option] = dict(selected=json.loads(initial_top.to_json()), daily=json.loads(daily_top.to_json()),modes={})
+        if len(set(view['days']))>1:
+            for display_mode in ('Multiple days','Median + band'):
+                if display_mode==view['mode']:serialized=overlays[option]['selected']
+                elif option==view.get('overlay','None'):serialized=banks[display_mode]['profile:settings']
+                else:serialized=json.loads(graph_figures(profile,**dict(options,mode=display_mode),unit=unit,dark=dark)[0].to_json())
+                overlays[option]['modes'][display_mode]=serialized
     bolus_variants = {}
-    if view['mode'] == 'Median + band':
+    if len(set(view['days']))>1 and 'IOB + Boluses' in view['layers']:
         for label, selected in [('selected',view['days']),('daily',days)]:
             fig = hourly_figure(loaded,'bolus',selected,dark,exclude_smb=True)
             add_profile_guides(fig,(profile.layout.meta or {}).get('profile_changes',[]),dark)
             bolus_variants[label] = json.loads(fig.to_json())
+    custom=custom_bundle(loaded,view['days'],days,view['mode'],unit,dark,custom_profiles if custom_profiles is not None else profiles or {}) if 'Custom graph' in view['layers'] else None
+    if custom and len(set(view['days']))>1:
+        for custom_mode in ('Multiple days','Median + band'):
+            bank=custom if custom_mode==view['mode'] else custom_bundle(loaded,view['days'],days,custom_mode,unit,dark,custom_profiles if custom_profiles is not None else profiles or {})
+            by_id={f['id']:f for f in bank['fields']}
+            for field in custom['fields']:field.setdefault('modes',{})[custom_mode]=by_id.get(field['id'],field)['selected']
     changes=loaded['data'].get('changes')
     events=[]
     if changes is not None:
@@ -63,11 +94,17 @@ def navigation_bundle(profile, view, unit, dark, profiles=None, metric=None, cus
             if row.label not in ('Site Change','Sensor Start','Sensor Change'):continue
             at=row.time.tz_convert(loaded['zone'])
             events.append(dict(date=at.date().isoformat(),minute=at.hour*60+at.minute+at.second/60,label=row.label))
-    return dict(report_capabilities=dict(profiles=bool(loaded.get('recorded_profiles'))),profile_events=profile_events(loaded),change_events=events,report_profile=json.loads(profile.to_json()),
+    notes=[]
+    frame=loaded['data'].get('automation_notes')
+    if frame is not None:
+        for row in frame.itertuples():
+            at=row.time.tz_convert(loaded['zone'])
+            notes.append(dict(date=at.date().isoformat(),minute=at.hour*60+at.minute+at.second/60,label=row.label))
+    return dict(automation_notes=notes,mode_banks=banks,sleep_day_height=SLEEP_DAY_HEIGHT,report_capabilities=dict(profiles=bool(loaded.get('recorded_profiles'))),profile_events=profile_events(loaded),change_events=events,report_profile=json.loads(profile.to_json()),
                 report_profiles={k:json.loads(f.to_json()) for k,f in (custom_profiles if custom_profiles is not None else profiles or {}).items()},
                 source_first=str(loaded['first']),source_last=str(loaded['last']),activity_bands=activity_shapes(loaded,days,'One day'),garmin_sleep_notes=loaded.get('garmin_sleep_notes',[]),garmin_units=loaded.get('garmin_units','Unknown'),layers=view['layers'],state_scope=st.session_state.setdefault('health_view_scope',uuid.uuid4().hex),
                 date_revision=st.session_state.get('health_date_revision',0),config_revision=st.session_state.get('health_config_revision',0),
-                custom_ids=custom_ids,custom_catalog=custom_catalog,saved_config=st.session_state.get('health_view_config'),has_nightscout=loaded.get('has_nightscout',True),data_only=view.get('data_only',False),garmin_daily=loaded.get('garmin_daily',[]),garmin_activities=loaded.get('garmin_activities',[]),custom=custom_bundle(loaded,view['days'],days,view['mode'],unit,dark,custom_profiles if custom_profiles is not None else profiles or {}) if 'Custom graph' in view['layers'] else None,
+                custom_ids=custom_ids,custom_catalog=custom_catalog,saved_config=st.session_state.get('health_view_config'),has_nightscout=loaded.get('has_nightscout',True),data_only=view.get('data_only',False),garmin_daily=loaded.get('garmin_daily',[]),garmin_activities=loaded.get('garmin_activities',[]),custom=custom,
                 profiles={key:json.loads(fig.to_json()) for key,fig in (profiles or {}).items()},metric=metric,
                 show_targets=initial_targets,bolus_without_smb=bolus_variants, days=[day.isoformat() for day in days], selected=[day.isoformat() for day in view['days']],
                 mode=view['mode'], same_scale=initial_scale, unit=unit,
@@ -85,10 +122,42 @@ def prepared_graphs(profile, view, unit, dark, profiles=None, metric=None, custo
     def build():
         chart_view={k:v for k,v in view.items() if k not in ('custom_ids','custom_catalog')}
         figures=graph_figures(profile,**dict(chart_view,show_targets=True,same_scale=False),unit=unit,dark=dark)
-        navigation=navigation_bundle(profile,view,unit,dark,profiles,metric,custom_profiles)
+        navigation=navigation_bundle(profile,view,unit,dark,profiles,metric,custom_profiles,initial=figures)
         navigation['render_key']=hashlib.sha256(repr(key).encode()).hexdigest()
         return figures,navigation
     return cached(view['loaded'],'prepared',key,build,limit=3)
+
+
+def pack_payload(raw_payload):
+    trace_pool=[];trace_index={};period_pool=[];period_index={};array_pool=[];array_index={}
+    def intern(value):
+        if isinstance(value,list):return [intern(v) for v in value]
+        if not isinstance(value,dict):return value
+        if 'glucose' in value and 'baseline' in value and 'x' in value and 'id' in value:
+            encoded=json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
+            index=period_index.get(encoded)
+            if index is None:index=len(period_pool);period_index[encoded]=index;period_pool.append(value)
+            return {'$period':index}
+        if 'type' in value and ('x' in value or 'z' in value) and ('y' in value or 'z' in value):
+            encoded=json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
+            index=trace_index.get(encoded)
+            if index is None:index=len(trace_pool);trace_index[encoded]=index;trace_pool.append(value)
+            return {'$trace':index}
+        return {k:intern(v) for k,v in value.items()}
+    packed=intern(raw_payload)
+    def intern_arrays(value):
+        if isinstance(value,list):
+            if len(value)>24:
+                encoded=json.dumps(value,separators=(',',':'),allow_nan=False)
+                index=array_index.get(encoded)
+                if index is None:index=len(array_pool);array_index[encoded]=index;array_pool.append(value)
+                return {'$array':index}
+            return [intern_arrays(v) for v in value]
+        if isinstance(value,dict):return {k:intern_arrays(v) for k,v in value.items()}
+        return value
+    packed['trace_pool']=[intern_arrays(t) for t in trace_pool];packed['period_pool']=[intern_arrays(p) for p in period_pool];packed['array_pool']=array_pool
+    return packed
+
 
 
 def viewer_html(figures, dark, navigation=None):
@@ -99,7 +168,8 @@ def viewer_html(figures, dark, navigation=None):
         from report_config import presets
         navigation=dict(navigation,report_presets=presets())
     navigation_json=json.dumps(navigation,allow_nan=False).replace('<','\\u003c')
-    payload_json='{"specs":'+specs+',"navigation":'+navigation_json+'}'
+    raw_payload=dict(specs=json.loads(specs),navigation=json.loads(navigation_json))
+    payload_json=json.dumps(pack_payload(raw_payload),separators=(',',':'),allow_nan=False).replace('<','\\u003c')
     theme=palette(dark)
     return """<!doctype html><html><head><meta charset="utf-8"><style>
 [hidden] {display:none!important;}
@@ -114,6 +184,7 @@ button[aria-pressed="true"] {outline:2px solid #22a6bb;}
 .bolus-controls button {background:transparent;color:inherit;border:1px solid #80808080;border-radius:5px;padding:5px 10px;cursor:pointer;}
 .custom-options {display:flex;flex-wrap:wrap;gap:5px;padding:8px 0;}
 .report-controls {position:relative;font-size:12px;}
+.insight-method-note {font-size:11px;line-height:1.25;margin:3px 0 5px;opacity:.85;}
 .report-controls summary {cursor:pointer;border:1px solid GRID;border-radius:5px;padding:5px 9px;}
 .report-options {position:absolute;top:30px;right:0;width:340px;max-height:70vh;overflow:auto;z-index:40;border:1px solid GRID;border-radius:7px;padding:12px;background:SURFACE;box-shadow:0 4px 16px #0005;}
 .report-options label {display:flex;justify-content:space-between;gap:8px;margin:6px 0;}
@@ -218,6 +289,12 @@ button[aria-pressed="true"] {outline:2px solid #22a6bb;}
 <script>""".replace('BACKGROUND',theme['background']).replace('SURFACE',theme['surface']).replace('TEXT',theme['text']).replace('GRID',theme['grid']) + plotly_script()+"""</script><script>
 const payload = __VIEWER_PAYLOAD__;
 const specs = payload.specs;
+function hydrate(value){
+  if(Array.isArray(value))return value.map(hydrate);
+  if(value && typeof value==='object'){if('$array' in value)return payload.array_pool[value.$array];if('$trace' in value)return payload.trace_pool[value.$trace];if('$period' in value)return payload.period_pool[value.$period];for(const key of Object.keys(value))value[key]=hydrate(value[key]);}return value;
+}
+if(payload.trace_pool)hydrate(payload.trace_pool);if(payload.period_pool)hydrate(payload.period_pool);
+hydrate(payload.specs);if(payload.navigation)hydrate(payload.navigation);
 const navigation = payload.navigation;
 const dataOnly=!!navigation?.data_only;
 if(dataOnly)document.getElementById('profile').style.display='none';
@@ -279,6 +356,17 @@ const graphs = [document.getElementById('profile')];
 const targetNotes = [document.getElementById('profile-target-note')];
 function updateTargetNote(div,index) {
   const note=targetNotes[index];
+  if(panelStateAt(index).deleted){note.hidden=true;return;}
+  if(div.layout.meta?.kind==='insight'){
+    note.hidden=false;note.replaceChildren();const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Recorded periods · methods and summary';details.appendChild(summary);
+    const text=document.createElement('p');text.textContent=div.layout.meta.insight_relationship?
+      'One point per recorded sleep period with both selected metrics; periods are not averaged together. Glucose mean and percentages use observed five-minute bin medians. Range: 4–10 mmol/L (72–180 mg/dL). Absolute-glucose points use red high/low coloring; percentage outcomes use their own scale. Missing readings are excluded, not filled.':
+      'One '+(div.layout.meta.insight_aggregation || 'Median').toLowerCase()+' contribution per event/time bin, then the same aggregation across events; bands need at least two periods. The 25–75% band describes variation between periods, not a confidence interval. Absolute glucose uses the fixed 4–10 mmol/L range (72–180 mg/dL); high and low points are red. Δ and variability do not use absolute-glucose thresholds. Glucose gaps >10 min stay blank. Δ uses the recorded t=0 value or adjacent bracketed readings ≤10 min apart. Excluded baselines: '+(div.layout.meta.insight_excluded_baselines || 0)+'. Sensor changes can include restarts. Variability measures the signal, not sensor accuracy.';details.appendChild(text);
+    insightSummaryTable(div,details);
+    if(!['meal','sleep'].includes(div.layout.meta.insight))for(const s of div.layout.meta.series || []){const row=document.createElement('div');row.textContent=s.label+' · observed duration '+number(s.duration/60,1)+' h'+(div.layout.meta.insight.startsWith('site')?' · CV '+number(s.statistics.cv)+'% · TIR '+number(s.statistics.tir)+'% · above-range AUC '+number(s.statistics.above_exposure)+' '+navigation.unit+'·h':'')+' · baseline: '+s.baseline_note;details.appendChild(row);}
+    const compact=document.createElement('p');compact.className='insight-method-note';compact.textContent=div.layout.meta.insight_note || '';note.appendChild(compact);
+    note.appendChild(details);return;
+  }
   const targets=div.data.some(trace=>trace.meta?.kind==='target'),smb=div.data.some(trace=>trace.meta?.baseline_smb);
   const bands=(div.layout.shapes || []).filter(s=>s.name?.startsWith('Activity | '));
   const garminKey=div.layout.meta?.dataset;
@@ -323,6 +411,8 @@ function updateTargetNote(div,index) {
 __CUSTOM_GRAPH__
 __GARMIN_VIEW__
 __FILLED_REGIONS__
+__PANEL_VIEW__
+__INSIGHTS_VIEW__
 
 const panels = document.getElementById('panels');
 const panelCards={},panelOrder=[],moveButtons=[];
@@ -360,6 +450,7 @@ function renderHoverReadout(parts,color) {
 const expand = document.getElementById('expand');
 function createPanel(i) {
   if(specs[i].layout.meta?.kind==='custom' && !specs[i].layout.meta.custom_id){const state=newCustomState();specs[i].layout.meta.custom_id=state.id;if(navigation?.figures?.[i])navigation.figures[i].layout.meta.custom_id=state.id;}
+  const instance=ensurePanelState(specs[i]);
   const panel=document.createElement('section');panel.className='graph-panel';panel.graphIndex=i;panelCards[i]=panel;panelOrder.push(i);panels.appendChild(panel);
   const orderBar=document.createElement('div');orderBar.className='bolus-controls';panel.appendChild(orderBar);const areas=controlAreas(orderBar);
   const move=document.createElement('div');move.className='axis-move';areas.axis.appendChild(move);
@@ -369,20 +460,23 @@ function createPanel(i) {
     button.setAttribute('aria-label',button.title);button.addEventListener('click',()=>movePanel(panel.graphIndex,direction));
     moveButtons.push({button,panel,direction});move.appendChild(button);
   }
+  panelModeControls(areas.settings,panel,specs[i]);
   garminControls(orderBar,specs[i]);
+  insightControls(areas.settings,panel,specs[i],areas.content);profileCopyControls(areas,panel,specs[i]);
   if(specs[i].layout.meta?.kind==='custom')setupCustomControls(orderBar,specs[i].layout.meta.custom_id);
   if(specs[i].layout.title.text.startsWith('Glucose ·')) {
     const button=document.createElement('button');button.type='button';
-    button.addEventListener('click',toggleTargets);targetButtons.push(button);areas.content.appendChild(button);
+    button.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{s.showTargets=!s.showTargets;}));button.panel=panel;targetButtons.push(button);areas.content.appendChild(button);
   }
   if(specs[i].layout.meta?.kind==='hourly') {
     const bar=areas.content;
+    hourlyGridControls(bar,panel,specs[i]);
     const average=document.createElement('button');average.type='button';average.value=specs[i].layout.meta.dataset;
     average.title='Switch the hourly bars between median and arithmetic mean of complete daily hour totals. Zero-event hours count; missing and partial hours do not.';
-    average.addEventListener('click',()=>toggleHourly(panel.graphIndex));areas.settings.appendChild(average);hourlyButtons.push(average);
+    average.addEventListener('click',()=>toggleHourly(panel.graphIndex));areas.settings.appendChild(average);average.panel=panel;hourlyButtons.push(average);
     if(specs[i].layout.meta.dataset==='bolus' && navigation?.bolus_without_smb?.selected) {
-      const button=document.createElement('button');button.type='button';button.textContent='Exclude SMB';button.addEventListener('click',()=>toggleSMB(panel.graphIndex));bar.appendChild(button);bolusButtons.push(button);
-      const note=document.createElement('span');note.textContent='Grid + histogram · unknown boluses remain included';bar.appendChild(note);
+      const button=document.createElement('button');button.type='button';button.textContent='Exclude SMB';button.addEventListener('click',()=>toggleSMB(panel.graphIndex));bar.appendChild(button);button.panel=panel;bolusButtons.push(button);
+      const note=document.createElement('span');note.textContent='Unknown boluses remain included';bar.appendChild(note);
     }
 
   }
@@ -480,6 +574,11 @@ function showHover(div,event) {
   const label=meta.label || trace.name || 'Value';
   card.replaceChildren();
   const parts=[label,value+(meta.unit?' '+meta.unit:''),(meta.date?meta.date+' · ':'')+clock];
+  if(meta.kind==='automation_note'){parts[1]='';parts[2]=meta.date+' · '+clock;}
+  if(meta.kind==='profile_event'){parts[1]=Number.isFinite(meta.percentage)?meta.percentage+'%':'';parts[2]=meta.date+' · '+clock;}
+  if(div.layout.meta?.non_time){parts[2]=number(point.x,2)+' hours since event';if(point.customdata)parts.push(point.customdata+' contributing periods');}
+  if(meta.kind==='insight_relationship')parts.splice(0,parts.length,point.customdata[0],value+' '+meta.unit,meta.x_label+': '+number(point.x,2)+' '+meta.x_unit,
+    'Glucose coverage '+number(point.customdata[1],1)+'% · '+point.customdata[3]+' observed bins','Recorded stages '+number(point.customdata[2],1)+'%');
   if(meta.baseline_smb && Array.isArray(point.customdata))parts[1]=number(point.customdata[1],3)+' U';
   if(meta.kind==='garmin_sleep' || meta.kind==='garmin_interval') {parts[1]='';if(point.customdata)parts.push(String(point.customdata));}
   if(meta.kind==='target' && point.customdata)parts.push(String(point.customdata));
@@ -490,7 +589,7 @@ function showHover(div,event) {
   // Plotly 6.9 supplies axis transforms with its hover event. Reusing them also
   // places highlights correctly on the secondary axis and after zoom/pan.
   graphs.forEach((g,i)=>{
-    if(g.layout.meta?.non_time){guides[i].style.display='none';highlights[i].style.display='none';return;}
+    if(div.layout.meta?.non_time || g.layout.meta?.non_time){guides[i].style.display='none';highlights[i].style.display='none';return;}
     const axis=g._fullLayout.xaxis;
     const px=axis._offset+axis.l2p(point.x);
     const inside=px>=axis._offset && px<=axis._offset+axis._length;
@@ -524,7 +623,7 @@ function visibleWidth() {return intersects ? Math.floor(viewer.getBoundingClient
 function axisPolicy(view,index) {
   const {data,layout}=view;
   const valuesFor=axis=>data.filter(t=>(t.yaxis || 'y')===axis && t.visible!==false).flatMap(t=>t.y || []).filter(Number.isFinite);
-  if(index===0 && !dataOnly) {
+  if((index===0 || layout.meta?.profile_copy) && !dataOnly) {
     const originalGlucoseRange=currentOverlay==='Glucose'?layout.yaxis2?.range:null;
     for(const axis of [layout.yaxis,layout.yaxis2].filter(Boolean)) {
       delete axis.range;delete axis.matches;delete axis.autorangeoptions;axis.autorange=true;
@@ -539,7 +638,7 @@ function axisPolicy(view,index) {
       layout.yaxis2.range=[0,navigation.unit==='mmol/L'?20:360];layout.yaxis2.autorange=false;
     }
   }
-  if(index===0 && sameScale && layout.yaxis2 && !data.some(t=>['garmin_sleep','garmin_interval'].includes(t.meta?.kind))) {
+  if((index===0 || layout.meta?.profile_copy) && sameScale && layout.yaxis2 && !data.some(t=>['garmin_sleep','garmin_interval'].includes(t.meta?.kind))) {
     const values=[0,...valuesFor('y'),...valuesFor('y2'),...(layout.yaxis2.range || [])];
     const low=Math.min(...values),high=Math.max(...values),span=Math.max(1,high-low);
     const limits=[low<0?low-.05*span:0,high+(data.some(t=>t.mode?.includes('text')) ? .20 : .08)*span];
@@ -581,12 +680,12 @@ function garminAxes(view) {
     if(t.meta?.kind==='garmin_interval')Object.assign(axis,{tickvals:[1],ticktext:['Exercise'],range:[0,2],autorange:false});
     if(t.meta?.dataset==='g_sleep' && t.meta?.kind==='median')Object.assign(axis,{range:[0,100],autorange:false});
   }
-  if(navigation?.mode==='Median + band' && !dateCycled){
+  if(view.layout.meta?.display_mode==='Median + band' && !dateCycled){
     const options=displayOptions(view.layout),refs=new Set(view.data.filter(t=>t.meta?.sleep_variant).map(t=>t.yaxis || 'y'));
     if(view.layout.meta?.dataset==='g_sleep')refs.add('y');
     if(!view.layout.meta?.dataset && view.layout.meta?.kind!=='custom' && currentOverlay==='Garmin · Sleep' && view.layout.yaxis2)refs.add('y2');
     for(const ref of refs){const axis=view.layout['yaxis'+ref.slice(1)];
-      if(axis)Object.assign(axis,{range:[0,options.sleepDistribution?60:100],autorange:false});}
+      if(axis)Object.assign(axis,{range:[0,options.sleepDistribution?1:100],autorange:false});}
   }
 }
 function movePanel(index,direction) {
@@ -606,13 +705,22 @@ async function toggleScale() {
   });
 }
 function decorate(source,index) {
+  const state=panelStateAt(index);if(!state.profileCopy)return decorateCore(source,index);
+  const original=[currentOverlay,currentMetric,sameScale];
+  try{currentOverlay=state.overlay;currentMetric=state.metric;sameScale=state.sameScale;return decorateCore(source,index);}
+  finally{[currentOverlay,currentMetric,sameScale]=original;}
+}
+function decorateCore(source,index) {
+  const isProfile=index===0 || panelStateAt(index).profileCopy;
   const view=JSON.parse(JSON.stringify(source)),profile=navigation?.profiles?.[currentMetric];
+  view.layout.meta={...view.layout.meta,profile_copy:panelStateAt(index).profileCopy,profile_same_scale:panelStateAt(index).profileCopy?sameScale:undefined,custom_id:specs[index].layout.meta?.custom_id,panel_id:specs[index].layout.meta?.panel_id,display_mode:effectivePanelMode(index)};
+  if(view.layout.meta.kind==='insight'){transformInsight(view,index);return view;}
   if(view.layout.meta?.kind==='custom')composeCustom(view);
   if(profile) {
     const guides=(profile.layout.shapes || []).filter(s=>s.name==='Profile change');
     view.layout.shapes=(view.layout.shapes || []).filter(s=>s.name!=='Profile change').concat(guides);
     view.layout.meta={...view.layout.meta,profile_changes:profile.layout.meta?.profile_changes || []};
-    if(index===0) {
+    if(isProfile) {
       view.data=profile.data.map(t=>({...t,yaxis:'y',xaxis:'x'})).concat(view.data.filter(t=>t.meta?.kind!=='profile'));
       view.layout.title.text=profile.layout.title.text.split(' · ')[0]+' · '+view.layout.title.text.split(' · ').slice(1).join(' · ');
       view.layout.yaxis.title=profile.layout.yaxis.title;
@@ -621,10 +729,10 @@ function decorate(source,index) {
       view.layout.uirevision=currentMetric+':'+currentOverlay;
     }
   }
-  const glucose=index===0?currentOverlay==='Glucose':view.layout.title.text.startsWith('Glucose ·');
-  if(glucose && !showTargets)view.data=view.data.filter(t=>!['target','target_fill','target_boundary'].includes(t.meta?.kind));
+  const glucose=isProfile?currentOverlay==='Glucose':view.layout.title.text.startsWith('Glucose ·');
+  if(glucose && !(index===0?showTargets:panelStateAt(index).showTargets))view.data=view.data.filter(t=>!['target','target_fill','target_boundary'].includes(t.meta?.kind));
   if(view.layout.meta?.kind==='hourly' && !view.layout.meta.single_day) {
-    const mode=hourlyModes[view.layout.meta.dataset] || 'Average';
+    const mode=panelStateAt(index).hourly || 'Average';
     const heat=view.data.find(t=>t.meta?.kind==='hourly_heatmap'),bars=view.data.find(t=>t.meta?.kind==='hourly_histogram');
     bars.y=Array.from({length:24},(_,hour)=>{
       const values=heat.z.map((row,i)=>heat.customdata[i][hour]?.[5]?row[hour]:null).filter(Number.isFinite);
@@ -637,22 +745,27 @@ function decorate(source,index) {
     view.layout.yaxis2.title.text=mode+' '+heat.meta.unit;
     view.layout.meta.statistic=mode;
   }
+  applyHourlyGrid(view,index);
   composeSleep(view);
   if(view.layout.meta?.kind!=='custom')transformGarmin(view,index);
   applyActivityShading(view);
   applyChangeEvents(view,index);
-  applyProfileEvents(view);
   axisPolicy(view,index);
   workoutAxes(view);
   closeFilledRegions(view);
-  compactLegend(view.data);
+  compactLegend(view.data);applyPanelRanges(view,index);applyProfileEvents(view);applyAutomationNotes(view,index);
   return view;
 }
 function localSource(index) {
-  if(index===0 && navigation?.overlays)return navigation.overlays[currentOverlay][dateCycled?'daily':'selected'];
-  if(excludeSMB && specs[index].layout.meta?.kind==='hourly' && specs[index].layout.meta.dataset==='bolus')return navigation.bolus_without_smb[dateCycled?'daily':'selected'];
-  return dateCycled?navigation.figures[index]:specs[index];
+  const instance=panelStateAt(index);
+  if(instance.profileCopy && navigation?.overlays?.[instance.overlay]){const bank=navigation.overlays[instance.overlay];return dateCycled?bank.daily:(bank.modes?.[effectivePanelMode(index)] || bank.selected);}
+  if(index===0 && navigation?.overlays)return dateCycled?navigation.overlays[currentOverlay].daily:(navigation.overlays[currentOverlay].modes?.[effectivePanelMode(0)] || navigation.overlays[currentOverlay].selected);
+  const state=panelStateAt(index),identity=state.base,mode=effectivePanelMode(index);
+  if(state.excludeSMB && specs[index].layout.meta?.kind==='hourly' && specs[index].layout.meta.dataset==='bolus' && navigation?.bolus_without_smb)return navigation.bolus_without_smb[dateCycled?'daily':'selected'];
+  if(!dateCycled && navigation?.mode_banks?.[mode]?.[identity])return navigation.mode_banks[mode][identity];
+  return dateCycled?(navigation.figures.find(f=>sourceIdentity(f)===identity) || specs[index]):specs[index];
 }
+
 async function redrawLocal(include=null) {
   const range=graphs[0]._fullLayout.xaxis.range.slice();
   const views=graphs.map((div,i)=>{
@@ -662,7 +775,7 @@ async function redrawLocal(include=null) {
     view.layout=sizedLayout(view,i);if(!view.layout.meta?.non_time){view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;workoutAxes(view,range);}
     return view;
   });
-  await Promise.all(graphs.map((div,i)=>views[i]?Plotly.react(div,views[i].data,views[i].layout):Promise.resolve()));
+  await Promise.all(graphs.map((div,i)=>views[i]?Plotly.react(div,views[i].data,views[i].layout).then(()=>reflowProfileLabels(div)):Promise.resolve()));
 }
 async function toggleTargets() {
   if(!ready || syncing)return;
@@ -674,20 +787,8 @@ async function toggleTargets() {
     finally{syncing=false;controls();}
   });
 }
-async function toggleHourly(index) {
-  if(!ready || syncing || dateCycled)return;
-  return enqueue(async()=>{
-    const key=specs[index].layout.meta.dataset,previous=hourlyModes[key];
-    syncing=true;controls();clearHover();
-    try {
-      hourlyModes[key]=previous==='Median'?'Average':'Median';
-      const view=decorate(localSource(index),index),range=graphs[0]._fullLayout.xaxis.range.slice();
-      view.layout=sizedLayout(view,index);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;workoutAxes(view,range);
-      await Plotly.react(graphs[index],view.data,view.layout);
-    } catch(error){hourlyModes[key]=previous;card.textContent='Could not update hourly statistic.';}
-    finally{syncing=false;controls();}
-  });
-}
+async function toggleHourly(index) {return changePanelState(index,s=>{s.hourly=s.hourly==='Median'?'Average':'Median';});}
+
 async function changeMetric(metric) {
   if(!ready || syncing)return;
   return enqueue(async()=>{
@@ -701,27 +802,31 @@ function sizedLayout(spec, index) {
   const layout=JSON.parse(JSON.stringify(spec.layout));
   layout.width=Math.max(1, (panels.clientWidth || visibleWidth())-(index>0?66:0));
   if(index===0 && !dataOnly)layout.height=250;
+  profileEventLayout(layout);
   layout.autosize=false;
   return layout;
 }
 function controls() {
-  customControls();
-  for(const {key,button} of eventButtons)button.setAttribute('aria-pressed',String(eventOptions[key]));
-  if(changeSelect){changeSelect.value=changeScope;changeSelect.disabled=!ready || syncing;}
+  customControls();panelControls();
+  for(const panel of Object.values(panelCards))panel.hidden=panelStateAt(panel.graphIndex).deleted || (selectedDays.length<2 && (specs[panel.graphIndex].layout.meta?.kind==='insight' || ['profile_percentage','sensor_changes','site_changes'].includes(specs[panel.graphIndex].layout.meta?.dataset)));
+  graphs[0].hidden=dataOnly || panelStateAt(0).deleted;
+  if(panelStateAt(0).deleted)targetNotes[0].hidden=true;
+  const profileGroup=document.getElementById('profile-settings-group');if(profileGroup)profileGroup.hidden=dataOnly || panelStateAt(0).deleted;
+  eventControlState();
   for(const panel of Object.values(panelCards)){const bar=panel.children[0],a=bar.graphAreas;if(a){a.content.hidden=a.content.children.length<=1;a.settings.parentElement.hidden=a.settings.children.length===0;}}
   garminControlState();activityControlState();
-  if(ready && !syncing)persistViewer();
+  if(ready && !syncing){persistViewer();notifyHiddenGraphs();}
   previousDay.disabled=!ready || syncing || !navigation || navigation.days.length<2;
   nextDay.disabled=previousDay.disabled;dayLabel.disabled=!ready || syncing || !navigation;
   overlaySelect.disabled=!ready || syncing;overlaySelect.value=currentOverlay;
-  hourlyButtons.forEach(button=>{button.disabled=!ready || syncing || dateCycled;button.textContent=dateCycled?'Bars: selected day':'Bars: '+hourlyModes[button.value];button.setAttribute('aria-pressed',String(!dateCycled && hourlyModes[button.value]==='Average'));});
+  hourlyButtons.forEach(button=>{if(panelCards[button.panel.graphIndex]!==button.panel)return;button.disabled=!ready || syncing || dateCycled;button.textContent=dateCycled?'Hourly bars: selected day':'Hourly bars: '+panelStateAt(button.panel.graphIndex).hourly;button.setAttribute('aria-pressed',String(!dateCycled && panelStateAt(button.panel.graphIndex).hourly==='Average'));});
   scaleButton.disabled=!ready || syncing || (currentOverlay==='None' || currentOverlay==='Garmin · Sleep' || currentOverlay==='Garmin · Activities');scaleButton.textContent='Same axis scale: '+(sameScale?'on':'off');scaleButton.setAttribute('aria-pressed',String(sameScale));
   moveButtons.forEach(({button,panel,direction})=>{const position=panelOrder.indexOf(panel.graphIndex)+direction;button.disabled=!ready || syncing || position<0 || position>=panelOrder.length;});
   targetButton.hidden=dataOnly || currentOverlay!=='Glucose';
-  if(topControlAreas){topControlAreas.content.hidden=overlayControl.hidden && targetButton.hidden;topControlAreas.settings.parentElement.hidden=Array.from(topControlAreas.settings.children).every(el=>el.hidden);}
+  if(topControlAreas){topControlAreas.content.hidden=panelStateAt(0).deleted || (overlayControl.hidden && targetButton.hidden);topControlAreas.settings.parentElement.hidden=Array.from(topControlAreas.settings.children).every(el=>el.hidden);}
   metricButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(button.value===currentMetric));});
-  targetButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(showTargets));button.textContent='Temp targets: '+(showTargets?'on':'off');});
-  bolusButtons.forEach(button=>{button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(excludeSMB));button.textContent=excludeSMB?'Exclude SMB: on':'Exclude SMB: off';});
+  targetButtons.forEach(button=>{if(button.panel && panelCards[button.panel.graphIndex]!==button.panel)return;button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(button.panel?panelStateAt(button.panel.graphIndex).showTargets:showTargets));button.textContent='Temp targets: '+((button.panel?panelStateAt(button.panel.graphIndex).showTargets:showTargets)?'on':'off');});
+  bolusButtons.forEach(button=>{if(panelCards[button.panel.graphIndex]!==button.panel)return;button.disabled=!ready || syncing;button.setAttribute('aria-pressed',String(panelStateAt(button.panel.graphIndex).excludeSMB));button.textContent=panelStateAt(button.panel.graphIndex).excludeSMB?'Exclude SMB: on':'Exclude SMB: off';});
 }
 function compactLegend(data) {
   const seen=new Set();
@@ -740,7 +845,7 @@ function resizeVisible() {
   lastSize=size;
   clearHover();
   return Promise.all(graphs.map((div,i)=>Plotly.relayout(div,{width:Math.max(1,width-(i>0?66:0)),height:i===0 && !dataOnly?250:(div.layout.height || specs[i].layout.height),autosize:false})))
-    .then(()=>graphs.forEach(tidyLabels));
+    .then(()=>Promise.all(graphs.map(reflowProfileLabels))).then(()=>graphs.forEach(tidyLabels));
 }
 function scheduleLayout() {
   if(visibleWidth()<50) {lastSize='';return;}
@@ -753,8 +858,8 @@ function scheduleLayout() {
 }
 function positionAxisControls(div) {
   const index=graphs.indexOf(div),panel=panelCards[index];if(!panel)return;
-  const key=div.layout.meta?.dataset,floor=activityFloors.find(f=>f.key===key);if(!floor)return;
-  const axis=div._fullLayout.yaxis;
+  const key=div.layout.meta?.dataset,floor=activityFloors.find(f=>f.key===key && f.id===specs[index].layout.meta?.panel_id);if(!floor)return;
+  const axis=div._fullLayout.yaxis;if(!axis)return;
   floor.slider.parentElement.style.top=axis._offset+'px';
   floor.slider.style.height=Math.max(35,axis._length-30)+'px';
 }
@@ -765,7 +870,7 @@ function bindGraph(div,index) {
         div.on('plotly_hover',event=>queueHover(div,event));div.on('plotly_unhover',()=>queueHover(div,null));
         div.on('plotly_relayout',event=>{
           if(syncing || div.layout.meta?.non_time)return;
-          rememberCustomAxes(div,event);
+          rememberCustomAxes(div,event);rememberPanelAxes(div,event);
           let range=event['xaxis.range'];
           if(event['xaxis.range[0]']!==undefined)range=[event['xaxis.range[0]'],event['xaxis.range[1]']];
           if(event['xaxis.autorange'])range=[0,1440];
@@ -782,16 +887,17 @@ async function startPlots() {
     await enqueue(async()=>{
       if(visibleWidth()<50)return;
       await Promise.all(graphs.map((div,i)=>{const source=localSource(i);const view=decorate(dateCycled?dailyView(source,i,selectedDays[0],[0,1440]):source,i);return Plotly.newPlot(div,view.data,sizedLayout(view,i),
-        {responsive:false,displaylogo:false,scrollZoom:false,toImageButtonOptions:{format:'png',scale:2}});}));
+        {responsive:false,displaylogo:false,scrollZoom:false,toImageButtonOptions:{format:'png',scale:2}}).then(()=>reflowProfileLabels(div));}));
       graphs.forEach(bindGraph);
       ready=true;controls();await resizeVisible();
       if(navigation?.report_render)await exportReportFigures();
     });
-  } catch(error) {card.textContent='Could not draw graphs. Reopen this tab.';if(navigation?.report_render)window.parent.postMessage({type:'profile-studio:report-rendered',id:navigation.report_render.id,error:String(error)},'*');}
+  } catch(error) {console.error(error);card.textContent='Could not draw graphs: '+error.message;if(navigation?.report_render)window.parent.postMessage({type:'profile-studio:report-rendered',id:navigation.report_render.id,error:String(error)},'*');}
   finally {starting=false;}
 }
 function dailyView(spec,index,day,range) {
   const clone=JSON.parse(JSON.stringify(spec));
+  if(clone.layout.meta?.kind==='insight')return clone;
   if(clone.layout.meta?.kind==='custom') {
     clone.layout=sizedLayout(clone,index);clone.layout.meta.custom_day=day;clone.layout.xaxis.range=range;return clone;
   }
@@ -858,20 +964,8 @@ function drawCalendar() {
   });
 }
 dayLabel.addEventListener('click',()=>{drawCalendar();dateCalendar.hidden=!dateCalendar.hidden;dayLabel.setAttribute('aria-expanded',String(!dateCalendar.hidden));});
-async function toggleSMB(index) {
-  if(!ready || syncing)return;
-  return enqueue(async()=>{
-    const next=!excludeSMB,range=graphs[0]._fullLayout.xaxis.range.slice();
-    syncing=true;controls();clearHover();
-    try {
-      const source=next?navigation.bolus_without_smb[dateCycled?'daily':'selected']:(dateCycled?navigation.figures[index]:specs[index]);
-      const view=decorate(dateCycled?dailyView(source,index,selectedDays[0],range):source,index);
-      view.layout=sizedLayout(view,index);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;workoutAxes(view,range);
-      await Plotly.react(graphs[index],view.data,view.layout);excludeSMB=next;
-    } catch(error) {card.textContent='Could not update SMB filter.';}
-    finally {syncing=false;controls();}
-  });
-}
+async function toggleSMB(index) {return changePanelState(index,s=>{s.excludeSMB=!s.excludeSMB;});}
+
 async function cycleDay(direction,requestedDay=null) {
   if(!navigation || !ready || syncing)return;
   return enqueue(async()=>{
@@ -882,11 +976,11 @@ async function cycleDay(direction,requestedDay=null) {
     const previousDays=selectedDays,previousCycled=dateCycled;
     try {
       selectedDays=[day];dateCycled=true;
-      const source=navigation.figures.slice();
+      const source=specs.map((_,i)=>localSource(i));
       if(excludeSMB)source.forEach((spec,i)=>{if(spec.layout.meta?.kind==='hourly' && spec.layout.meta.dataset==='bolus')source[i]=navigation.bolus_without_smb.daily;});
       if(navigation.overlays)source[0]=navigation.overlays[currentOverlay].daily;
       const views=source.map((spec,i)=>decorate(dailyView(spec,i,day,range),i));
-      await Promise.all(graphs.map((div,i)=>views[i]?Plotly.react(div,views[i].data,views[i].layout):Promise.resolve()));
+      await Promise.all(graphs.map((div,i)=>views[i]?Plotly.react(div,views[i].data,views[i].layout).then(()=>reflowProfileLabels(div)):Promise.resolve()));
       selectedDays=[day];dateCycled=true;updateSummary();graphs.forEach(tidyLabels);
     } catch(error) {selectedDays=previousDays;dateCycled=previousCycled;card.textContent='Could not change the displayed day. Reopen the graph view.';}
     finally {syncing=false;controls();}
@@ -903,12 +997,12 @@ async function changeOverlay(requested) {
       let view;
       if(dateCycled)view=dailyView(navigation.overlays[currentOverlay].daily,0,selectedDays[0],range);
       else {
-        view=JSON.parse(JSON.stringify(navigation.overlays[currentOverlay].selected));
+        view=JSON.parse(JSON.stringify(localSource(0)));
         view.layout=sizedLayout(view,0);view.layout.xaxis.range=range;view.layout.xaxis.autorange=false;workoutAxes(view,range);
         view.layout.uirevision='overlay:'+currentOverlay;
       }
       view=decorate(view,0);
-      await Plotly.react(graphs[0],view.data,view.layout);tidyLabels(graphs[0]);
+      await Plotly.react(graphs[0],view.data,view.layout);await reflowProfileLabels(graphs[0]);tidyLabels(graphs[0]);
     } catch(error) {currentOverlay=previous;card.textContent='Could not change overlay. Reopen the graph view.';}
     finally {syncing=false;controls();}
   });
@@ -933,8 +1027,13 @@ if(!navigation?.report_render && typeof IntersectionObserver!=='undefined')new I
 __VIEWER_STATE__
 __REPORT_UI__
 setupTopControlAreas();setupActivityControls();setupChangeControls();setupReportControls();
-restoreViewer();updateSummary();controls();startPlots();
-</script></body></html>""".replace('__FILLED_REGIONS__',Path(__file__).with_name('filled_regions.js').read_text(encoding='utf-8'),1).replace('__GARMIN_VIEW__',Path(__file__).with_name('garmin_view.js').read_text(encoding='utf-8'),1).replace('__REPORT_UI__',Path(__file__).with_name('report_ui.js').read_text(encoding='utf-8'),1).replace('__VIEWER_STATE__',Path(__file__).with_name('viewer_state.js').read_text(encoding='utf-8'),1).replace('__CUSTOM_GRAPH__',Path(__file__).with_name('custom_graph.js').read_text(encoding='utf-8'),1).replace('__VIEWER_PAYLOAD__',payload_json,1)
+restoreViewer();applyGraphRestore();updateSummary();controls();startPlots();
+window.addEventListener('message',event=>{
+  if(event.source!==window.parent || event.data?.type!=='profile-studio:restore-graph')return;
+  enqueue(()=>{navigation.restore_graph=event.data.request;applyGraphRestore();
+    graphs.forEach((div,i)=>{if(div.layout)updateTargetNote(div,i);});controls();lastSize='';scheduleLayout();});
+});
+</script></body></html>""".replace('__FILLED_REGIONS__',Path(__file__).with_name('filled_regions.js').read_text(encoding='utf-8'),1).replace('__GARMIN_VIEW__',Path(__file__).with_name('garmin_view.js').read_text(encoding='utf-8'),1).replace('__PANEL_VIEW__',Path(__file__).with_name('panel_view.js').read_text(encoding='utf-8'),1).replace('__INSIGHTS_VIEW__',Path(__file__).with_name('insights_view.js').read_text(encoding='utf-8'),1).replace('__REPORT_UI__',Path(__file__).with_name('report_ui.js').read_text(encoding='utf-8'),1).replace('__VIEWER_STATE__',Path(__file__).with_name('viewer_state.js').read_text(encoding='utf-8'),1).replace('__CUSTOM_GRAPH__',Path(__file__).with_name('custom_graph.js').read_text(encoding='utf-8'),1).replace('__VIEWER_PAYLOAD__',payload_json,1)
 
 
 def render_graphs(figures, dark, navigation=None, cache=None):
@@ -942,13 +1041,21 @@ def render_graphs(figures, dark, navigation=None, cache=None):
     # without a page-level overlay covering the editor or save controls.
     html = cached(cache,'html',(navigation['render_key'],dark,st.session_state.get('health_report_preset_revision',0)),lambda: viewer_html(figures,dark,navigation),limit=3) if cache is not None and navigation and 'render_key' in navigation else viewer_html(figures,dark,navigation)
     event=graph_component(html=html,height=1040 if len(figures)>1 else 540,
+                          restore_graph=st.session_state.get('health_restore_graph'),
                           key='health_graph_'+str((navigation or {}).get('metric') or 'data'),default=None)
     handled=st.session_state.setdefault('health_graph_events',{})
     scope=str((navigation or {}).get('metric') or 'data')
     if isinstance(event,dict) and event.get('id') and event['id']!=handled.get(scope):
         handled[scope]=event['id']
         try:
-            if event.get('kind')=='report-preset':
+            if event.get('kind')=='graph-visibility':
+                hidden=event.get('hidden')
+                if not isinstance(hidden,list) or not all(isinstance(row,dict) and all(isinstance(row.get(k),str) for k in ('id','base','label')) for row in hidden):
+                    raise ValueError('Invalid hidden graph selection.')
+                if hidden!=st.session_state.get('health_hidden_graphs',[]):
+                    st.session_state.health_hidden_graphs=hidden
+                    st.rerun()
+            elif event.get('kind')=='report-preset':
                 from report_config import save_preset
                 save_preset(event.get('name'),event.get('settings'))
                 st.session_state.health_report_preset_revision=st.session_state.get('health_report_preset_revision',0)+1

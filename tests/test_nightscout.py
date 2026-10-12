@@ -43,7 +43,7 @@ class NightscoutTests(unittest.TestCase):
         self.assertIsNone(timestamp('2026-09-16T05:00:00'))
         self.assertEqual(timestamp('2026-09-16T07:00:00+02:00'),timestamp('2026-09-16T05:00:00Z'))
         with self.assertRaises(NightscoutError):
-            utc_bounds(date(2026,1,1),date(2026,2,1),'UTC')
+            utc_bounds(date(2026,1,1),date(2027,1,2),'UTC')
 
     def test_get_only_token_encoding_and_sanitized_errors(self):
         client = NightscoutClient('https://example.test/nightscout/', 'secret+token')

@@ -18,7 +18,7 @@ def time_minute(value):
 def report_range(request, loaded):
     first=date.fromisoformat(request['first']);last=date.fromisoformat(request['last'])
     if not loaded['first']<=first<=last<=loaded['last']:raise ValueError('Select dates within the loaded range; load more dates first if needed.')
-    if (last-first).days>30:raise ValueError('Export up to 31 days at a time.')
+    if (last-first).days>365:raise ValueError('Export up to 366 days at a time.')
     window=[time_minute(request.get('from_time','00:00')),time_minute(request.get('until_time','24:00'))]
     if window[0]>=window[1]:raise ValueError('The daily start time must be earlier than the end time. Split overnight windows into separate exports.')
     return [t.date() for t in pd.date_range(first,last)],window
@@ -33,12 +33,18 @@ def day_window(day,window,zone):
 
 def observed_stats(loaded,days,window,unit):
     factor=18 if unit=='mmol/L' else 1
-    frame=loaded['data']['glucose'];all_bins=[];daily=[];change_counts={label:0 for label in ('Site Change','Sensor Start','Sensor Change','Insulin Change')}
+    frames={key:loaded['data'].get(key,pd.DataFrame()).sort_values('time')
+            for key in ('glucose','bolus','carbs','changes') if 'time' in loaded['data'].get(key,pd.DataFrame())}
+    def within(key,start,end):
+        frame=frames.get(key,pd.DataFrame())
+        if frame.empty:return frame
+        return frame.iloc[frame.time.searchsorted(start):frame.time.searchsorted(end)]
+    all_bins=[];daily=[];change_counts={label:0 for label in ('Site Change','Sensor Start','Sensor Change','Insulin Change')}
     bolus_total=carbs_total=0.;known_days=0
     for day in days:
         start,end=day_window(day,window,loaded['zone']);end=max(start,min(end,loaded['loaded_at']))
         in_source=loaded.get('nightscout_first',loaded['first'])<=day<=loaded.get('nightscout_last',loaded['last']) and loaded.get('has_nightscout',True)
-        selected=frame[(frame.time>=start)&(frame.time<end)].copy()
+        selected=within('glucose',start,end).copy()
         if not selected.empty:
             midnight,_=utc_bounds(day,day,loaded['zone'])
             selected['bin']=(pd.to_datetime(selected.time,utc=True)-midnight).dt.total_seconds()//300
@@ -50,13 +56,13 @@ def observed_stats(loaded,days,window,unit):
         row=describe(values,unit);row.update(date=str(day),readings=len(selected),expected=expected,coverage=100*len(values)/expected if expected else None)
         known=in_source and loaded.get('availability',{}).get('treatments',False) and end>start
         for key in ('bolus','carbs'):
-            records=loaded['data'][key];records=records[(records.time>=start)&(records.time<end)]
-            row[key]=float(records.value.sum()) if known else None
+            records=within(key,start,end)
+            row[key]=float(records.value.sum()) if known and not records.empty else 0. if known else None
         if known:
             known_days+=1;bolus_total+=row['bolus'];carbs_total+=row['carbs']
-        changes=loaded['data'].get('changes',pd.DataFrame())
+        changes=within('changes',start,end)
         if not changes.empty:
-            for label,count in changes[(changes.time>=start)&(changes.time<end)].label.value_counts().items():
+            for label,count in changes.label.value_counts().items():
                 if label in change_counts:change_counts[label]+=int(count)
         daily.append(row)
     total=describe(np.array(all_bins),unit);expected=sum(row['expected'] for row in daily)

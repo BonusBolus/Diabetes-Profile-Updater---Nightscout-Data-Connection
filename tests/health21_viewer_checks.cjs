@@ -9,7 +9,7 @@ const run=(h,s)=>vm.runInContext(s,h.context);
   const graph=key=>run(h,'graphs').find(g=>g.layout.meta?.dataset===key);
   const step=graph('g_steps');assert(step.data.every(t=>t.meta.variant==='cumulative'));
   if(mode===2){assert(step.data.some(t=>t.name==='Median'));assert(step.data.some(t=>t.name==='25–75%' && t.showlegend));}
-  if(mode===1)assert(step.data.every(t=>t.meta.date));
+  if(mode===1)assert(step.data.some(t=>t.name==='Median'),'Multi-day graphs default to Median');
   await run(h,"changeGarminOption('stepsHistogram',true)");await h.settle();assert(step.data.every(t=>t.type==='bar'));
   if(mode>0){assert(step.data.every(t=>t.meta.aggregation==='Average'));await run(h,"changeGarminOption('aggregation','Median')");await h.settle();assert(step.data.every(t=>t.meta.aggregation==='Median'));}
   await run(h,"changeGarminOption('stepsHistogram',false)");await h.settle();

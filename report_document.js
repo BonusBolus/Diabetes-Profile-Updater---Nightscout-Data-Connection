@@ -6,7 +6,12 @@ function page(title,html,url,note){
   const subtitle=document.createElement('div');subtitle.className='subtitle';subtitle.textContent=report.title+' · '+report.period;section.appendChild(subtitle);
   const body=document.createElement('div');body.className='body';
   if(html)body.innerHTML=html;
-  if(url){const urls=Array.isArray(url)?url:[url];body.className+=' chart-stack';body.style.setProperty('--slot-height',report.chart_height_mm+'mm');for(const item of urls){const image=document.createElement('img');image.src=typeof item==='string'?item:item.url;if(item.slots)image.style.height=(report.chart_height_mm*item.slots)+'mm';image.alt=title;body.appendChild(image);}}
+  if(url){const urls=Array.isArray(url)?url:[url];body.className+=' chart-stack';body.style.setProperty('--slot-height',report.chart_height_mm+'mm');for(const item of urls){
+    const row=document.createElement('div');row.className='report-chart';const height=report.chart_height_mm*(item.slots || 1);row.style.height=height+'mm';
+    const image=document.createElement('img');image.src=typeof item==='string'?item:item.url;image.style.height=(height-(item.note_mm || 0))+'mm';image.alt=typeof item==='string'?title:item.title || title;row.appendChild(image);
+    if(item.note){const text=document.createElement('p');text.className='insight-note';text.textContent=item.note;row.appendChild(text);}
+    body.appendChild(row);
+  }}
   if(note){const text=document.createElement('p');text.className='note';text.textContent=note;body.appendChild(text);}
   section.appendChild(body);const footer=document.createElement('footer');
   for(const text of ['Profile Studio · '+report.generated,'Page '+(pages.children.length+1)]){const item=document.createElement('span');item.textContent=text;footer.appendChild(item);}
@@ -15,7 +20,7 @@ function page(title,html,url,note){
 function render(payload){
   return new Promise((resolve,reject)=>{
     const id=payload.navigation.report_render.id;
-    const timer=setTimeout(()=>finish(new Error('Chart rendering timed out. Try fewer days or graphs.')),120000);
+    const timer=setTimeout(()=>finish(new Error('Chart rendering timed out. Try fewer full-overlay layers.')),Math.max(120000,(payload.navigation.selected?.length || 1)*1000));
     function finish(error,figures){clearTimeout(timer);window.removeEventListener('message',receive);error?reject(error):resolve(figures);}
     function receive(event){
       if(event.source!==frame.contentWindow || event.data?.type!=='profile-studio:report-rendered' || event.data.id!==id)return;
@@ -36,6 +41,7 @@ async function build(){
         payload={specs:[figure],navigation:{report_render:{id:'figure-'+i,range:[0,1440],width:report.render_width,height:report.render_height,compact:report.graphs_per_page>=3},mode:'One day',days:[],selected:[],layers:[],unit:'',data_only:false,summaries:[]}};
       }
       const figures=await render(payload);
+      job.payload=null;job.figure=null; // Release completed raw data during long reports.
       const mode=job.title.startsWith('Median')?'Median':job.title.startsWith('Daily')?'Daily':job.title.startsWith('All days')?'Overlay':null;
       const clean=t=>t.replace(/<[^>]*>/g,'').replace(/ · [0-9]{4}-[0-9]{2}-[0-9]{2}.*$/,'').replace(/^Median /,'');
       let group=[],used=0;

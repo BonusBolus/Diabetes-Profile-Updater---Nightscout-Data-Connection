@@ -119,7 +119,7 @@ view=sidebar_controls('Europe/Amsterdam')
     def test_expanded_sleep_and_custom_navigation(self):
         loaded=merge_sources(None,self.load());profile=go.Figure(go.Scatter(x=[0,1440],y=[1,1]))
         profile.update_layout(title='Basal',yaxis_title='U/h')
-        view=dict(loaded=loaded,days=[self.first],mode='Median + band',layers=['Garmin · Heart rate','Garmin · Sleep','Garmin · Activities','Custom graph'])
+        view=dict(loaded=loaded,days=[self.first,self.last],mode='Median + band',layers=['Garmin · Heart rate','Garmin · Sleep','Garmin · Activities','Custom graph'])
         figures,nav=prepared_graphs(profile,view,'mmol/L',True)
         html=viewer_html(figures,True,nav)
         script=self.folder/'viewer.js';script.write_text(html.split('<script>')[-1].split('</script>')[0])

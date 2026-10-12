@@ -119,6 +119,16 @@ def fit_created(path,mtime,size):
     return None
 
 
+def coarse_location(latitude,longitude,semicircles=False):
+    """One rounded regional label, never retain or upload a route/GPS coordinate."""
+    a,b=number(latitude),number(longitude)
+    if a is None or b is None:return None
+    if semicircles:a*=180/(2**31);b*=180/(2**31)
+    if not (-90<=a<=90 and -180<=b<=180) or (a==0 and b==0):return None
+    a,b=round(a*4)/4,round(b*4)/4
+    return f"Area {abs(a):.2f}°{'N' if a>=0 else 'S'}, {abs(b):.2f}°{'E' if b>=0 else 'W'} · coarse 0.25° cell"
+
+
 @lru_cache(maxsize=64)
 def read_fit(path,mtime,size):
     import fitdecode
@@ -136,6 +146,7 @@ def read_fit(path,mtime,size):
             if message.name=='record':
                 at=value('timestamp')
                 if at is None:continue
+                # No location export: these GPS samples exist only during activities.
                 row=dict(time=pd.to_datetime(at,utc=True),segment=Path(path).stem+':'+str(segment))
                 for key,fields in {
                     'hr':['heart_rate'],'rr':['respiration_rate'],'cadence':['cadence'],
@@ -164,9 +175,9 @@ def read_fit(path,mtime,size):
     return rows,sessions
 
 
-def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,zone):
+def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,zone,include_sleep=True,include_activity=True):
     notes=[]
-    for day in pd.date_range(start.tz_convert(zone).date(),end.tz_convert(zone).date()):
+    for day in (pd.date_range(start.tz_convert(zone).date(),end.tz_convert(zone).date()) if include_sleep else []):
         path=root/'Sleep'/f'sleep_{day.date()}.json'
         if not path.is_file():continue
         try:
@@ -174,7 +185,7 @@ def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,z
             if note:notes.append(note)
         except (ValueError,TypeError,KeyError,OSError) as exc:warnings.append(f'Sleep export {path.name} could not be read: {exc}')
     folder=root/'FitFiles'/'Activities'
-    if folder.is_dir():
+    if include_activity and folder.is_dir():
         import fitdecode
         ids={str(a['activity_id']).split('_')[0] for a in activities if a.get('activity_id') is not None}
         count=0

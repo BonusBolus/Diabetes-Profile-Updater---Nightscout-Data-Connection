@@ -8,7 +8,7 @@ const run=(h,code)=>vm.runInContext(code,h.context);
   const message=h.sent.find(m=>m.type==='profile-studio:report-rendered');assert(message,'Renderer must acknowledge the report');
   assert(!message.error,message.error);assert(message.figures.length>=4,'Nonempty configured graphs are retained; empty activity metrics are omitted');assert(message.figures.every(f=>f.url.startsWith('data:image/svg+xml')));
   assert.equal(storage.size,0,'Export must not change live viewer settings');
-  assert.equal(run(h,'changeScope'),'all');assert.equal(run(h,'currentOverlay'),'Glucose');
+  assert.equal(run(h,'eventScopes.site'),'all');assert.equal(run(h,'currentOverlay'),'Glucose');
   assert.equal(run(h,"activityOptions('g_workout_hr').tauSeconds"),15);
   assert.equal(run(h,"activityOptions('g_workout_hr').lower"),100);
   for(const g of run(h,'graphs.filter(g=>!g.layout.meta?.non_time)'))assert.deepEqual(g._fullLayout.xaxis.range,[540,780]);
@@ -23,7 +23,7 @@ const run=(h,code)=>vm.runInContext(code,h.context);
     const steps=run(h,"graphs.find(g=>g.layout.meta?.dataset==='g_steps')");assert(steps.data.every(t=>t.meta.variant==='cumulative'));
   }
   const before=run(h,'JSON.stringify(graphs.map(g=>g.data))');
-  run(h,"changeSelect.value='off'");await run(h,'changeSelect.handlers.change()');await h.settle();
+  for(const key of ['site','sensor']){run(h,`eventSelects.find(s=>s.key==='${key}').select.value='off'`);await run(h,`eventSelects.find(s=>s.key==='${key}').select.handlers.change()`);await h.settle();}
   assert(run(h,'graphs.every(g=>!g.layout.shapes.some(s=>s.name?.startsWith("Change | ")))'));
   assert(run(h,'graphs.every(g=>!g.layout.annotations.some(s=>s.name?.startsWith("Change | ")))'));
   assert.equal(run(h,'JSON.stringify(graphs.map(g=>g.data))'),before,'Annotation toggle does not change glucose/median data');

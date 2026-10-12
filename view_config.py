@@ -62,6 +62,7 @@ def apply_configuration(config):
     st.session_state.health_date_view='One day' if config['mode']=='One day' else 'Date range'
     st.session_state.health_median_mode=config['mode']=='Median + band'
     viewer=dict(config['viewer'])
+    viewer.setdefault('defaultMode',config['mode'])
     garmin=dict(viewer.get('garmin') or {})
     legacy={'Garmin · HRV':'g_sleep_hrv','Garmin · SpO₂':'g_sleep_spo2',
             'Garmin · Sleep movement':'g_sleep_movement','Garmin · Restless moments':'g_sleep_restless','Garmin · Sleep respiration':'g_sleep_rr'}

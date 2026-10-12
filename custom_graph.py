@@ -38,7 +38,7 @@ def custom_bundle(loaded, days, all_days, mode, unit, dark, profiles):
         selected=dataset_traces(key,loaded,days,mode,unit,dark)
         daily=dataset_traces(key,loaded,all_days,'One day',unit,dark)
         fields.append(dict(id='garmin:'+key,label=label,unit=axis_unit,color=color,group='Garmin',dataset=key,
-                           selected_unit='Average sleep (min/hour)' if key=='g_sleep' and mode=='Median + band' else axis_unit,
+                           selected_unit='Average sleep (h/hour)' if key=='g_sleep' and mode=='Median + band' else axis_unit,
                            daily_unit=axis_unit,selected=json.loads(go.Figure(selected).to_json())['data'],
                            daily=json.loads(go.Figure(daily).to_json())['data']))
     for metric,fig in profiles.items():

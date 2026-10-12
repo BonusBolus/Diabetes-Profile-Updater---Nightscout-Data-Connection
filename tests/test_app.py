@@ -459,13 +459,14 @@ class EditorTests(unittest.TestCase):
             fig = draw.call_args_list[0].args[0][1]
             self.assertIn('Glucose',fig.layout.title.text)
             at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
-            at.button_group(key='health_date_view').set_value('Date range').run(); at.toggle(key='health_median_mode').set_value(True).run(); self.clean()
+            at.button_group(key='health_date_view').set_value('Date range').run(); self.clean()
             with patch('graph_view.render_graphs') as draw:
                 at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
                 at.button_group(key='ns_layers_diabetes').set_value(['Glucose','Temporary Basal','IOB + Boluses','COB + Carbs']).run()
                 self.clean()
             fig = draw.call_args_list[0].args[0][1]
-            self.assertTrue(any(t.name=='Median glucose' for t in fig.data))
+            self.assertTrue(any((t.meta or {}).get('kind')=='median' for t in fig.data))
+            self.assertFalse(any(getattr(t,'key',None)=='health_median_mode' for t in at.toggle))
             self.assertEqual(at.session_state.draft,before)
             at.session_state.editor_tab='I:C'  # AppTest has no stateful-tab driver.
             self.assertFalse(any(getattr(x,'key',None)=='ns_overlay_ic' for x in at.button_group))

@@ -42,7 +42,7 @@ class CustomGraphTests(unittest.TestCase):
     def test_grouped_layers_control_their_hourly_panels(self):
         loaded=sample_data();profile=go.Figure()
         for label,key,continuous in [('IOB + Boluses','bolus','iob'),('COB + Carbs','carbs','cob')]:
-            figs=graph_figures(profile,loaded,[loaded['first']],'Median + band',[label],'mmol/L',True)
+            figs=graph_figures(profile,loaded,[loaded['first'],loaded['last']],'Median + band',[label],'mmol/L',True)
             self.assertEqual(len(figs),3)
             self.assertTrue(any((t.meta or {}).get('dataset')==continuous for t in figs[1].data))
             self.assertEqual(figs[2].layout.meta['dataset'],key)

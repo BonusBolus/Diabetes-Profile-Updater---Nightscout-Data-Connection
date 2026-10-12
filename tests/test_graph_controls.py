@@ -100,7 +100,7 @@ if view:
         self.assertTrue(at.button(key='ns_calendar_2026-08-29').disabled)
         at.button(key='ns_calendar_2026-08-31').click().run()
         self.assertEqual(at.session_state.ns_day,date(2026,8,31))
-        at.button_group(key='health_date_view').set_value('Date range').run(); at.toggle(key='health_median_mode').set_value(True).run()
+        at.button_group(key='health_date_view').set_value('Date range').run()
         at.button(key='ns_calendar_2026-08-31').click().run()
         self.assertNotIn(date(2026,8,31),at.session_state.ns_days)
         at.button(key='ns_clear_days').click().run()

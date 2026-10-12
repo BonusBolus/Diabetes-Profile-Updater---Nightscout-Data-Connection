@@ -14,6 +14,7 @@ from appearance import palette
 from chart_cache import cached
 from nightscout_stats import continuous_summary, hourly_events
 from event_stats import EVENT_LAYERS, EVENT_LABELS, hourly_state_events
+from insights import INSIGHT_LAYERS
 from nightscout import UTC, glucose_summary, local_points
 
 DIABETES_LAYERS = {"Glucose":"glucose", "COB + Carbs":"cob_carbs", "IOB + Boluses":"iob_bolus",
@@ -21,8 +22,9 @@ DIABETES_LAYERS = {"Glucose":"glucose", "COB + Carbs":"cob_carbs", "IOB + Boluse
 GARMIN_MAIN_LAYERS = {"Garmin · Steps":"g_steps", "Garmin · Heart Rate":"g_hr", "Garmin · Activity":"g_workout",
                       "Garmin · Stress":"g_stress", "Garmin · Sleep":"g_sleep", "Garmin · Respiration":"g_waking_rr"}
 DIABETES_LAYERS.update(EVENT_LAYERS)
-LAYERS = {**DIABETES_LAYERS, **GARMIN_MAIN_LAYERS, "Custom graph":"custom"}
+LAYERS = {**DIABETES_LAYERS, **GARMIN_MAIN_LAYERS, **INSIGHT_LAYERS, "Custom graph":"custom"}
 LAYER_ALIASES = {"Garmin · Cumulative steps":"Garmin · Steps", "COB + carbs":"COB + Carbs", "IOB + boluses":"IOB + Boluses", "Temporary basal":"Temporary Basal",
+                 "Post-site-change glucose":"Site-age glucose",
                  "Nightscout targets":"Temporary Targets", "Variable sensitivity":"Variable Sensitivity",
                  "Garmin · Heart rate":"Garmin · Heart Rate", "Garmin · Activities":"Garmin · Activity", "Garmin · Workout":"Garmin · Activity",
                  "IOB":"IOB + Boluses", "Boluses":"IOB + Boluses", "COB":"COB + Carbs", "Carbs":"COB + Carbs"}
@@ -32,7 +34,9 @@ LAYER_ALIASES.update({label:'Garmin · Activity' for label,key in GARMIN_LAYERS.
 LAYER_ALIASES.update({label.replace('Activity ', 'Workout '):'Garmin · Activity' for label,key in GARMIN_LAYERS.items() if key.startswith('g_workout_')})
 
 def normalize_layers(layers):
-    return list(dict.fromkeys(LAYER_ALIASES.get(label,label) for label in layers if LAYER_ALIASES.get(label,label) in LAYERS))
+    # Old configurations selected the whole Insight group; retain all its graphs.
+    expanded=[value for label in layers for value in (list(INSIGHT_LAYERS) if label=='Insights' else [label])]
+    return list(dict.fromkeys(LAYER_ALIASES.get(label,label) for label in expanded if LAYER_ALIASES.get(label,label) in LAYERS))
 
 OVERLAYS = {"Glucose":["glucose"], "COB + Carbs":["cob","carbs"], "IOB + Boluses":["iob","bolus"],
             "Temporary Basal":["basal"], "Temporary Targets":["target"], "Variable Sensitivity":["variable_sens"]}
@@ -366,6 +370,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
     """Return a pinned profile figure followed by independent, time-aligned panels."""
     layers=normalize_layers(layers)
     overlay={'Nightscout targets':'Temporary Targets','Temporary basal':'Temporary Basal','COB + carbs':'COB + Carbs','IOB + boluses':'IOB + Boluses','Variable sensitivity':'Variable Sensitivity'}.get(overlay,overlay)
+    if len(set(days))<2:mode='One day'
     dates=date_label(days)
     title=profile_figure.layout.title.text or 'Profile'
     title = title.split(' · ')[0]+' · '+dates
@@ -422,10 +427,6 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
             (['iob','bolus'],'IOB & boluses','U'),(['cob','carbs'],'COB & carbs','g'),
             (['target'],'Temp targets',unit)]
     summary_layout = summary_layout or mode == 'Median + band'
-    if summary_layout:
-        groups=[(['glucose'],'Glucose',unit),(['basal'],'Temp basal','U/h'),
-                (['iob'],'Median IOB' if mode=='Median + band' else 'IOB','U'),
-                (['cob'],'Median COB' if mode=='Median + band' else 'COB','g'),(['target'],'Temp targets',unit)]
     figures=[top]
     if 'basal' in selected and not loaded['data']['basal_percent'].empty:
         groups.insert(2,(['basal_percent'],'Temp basal %','% field'))
@@ -486,13 +487,16 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         apply_garmin_axis(fig,key,mode)
         figures.append(fig)
     for key in EVENT_LABELS:
-        if key in selected:figures.append(hourly_figure(loaded,key,days,dark))
+        if key in selected and len(set(days))>1:figures.append(hourly_figure(loaded,key,days,dark))
+    if any(key.startswith('insight_') for key in selected) and len(set(days))>1:
+        from insights import insight_figures
+        figures.extend(insight_figures(loaded,days,unit,dark,selected))
     if 'custom' in selected:
         fig=go.Figure()
         style_figure(fig,f'Custom graph · {dates}','',loaded['zone'],dark,height=390)
         fig.update_layout(meta=dict(fig.layout.meta or {},kind='custom'))
         figures.append(fig)
-    if summary_layout:
+    if len(set(days))>1:
         figures.extend(hourly_figure(loaded,key,days,dark) for key in ('bolus','carbs') if key in selected)
     rank={'glucose':0,'cob':1,'carbs':1,'iob':2,'bolus':2,'basal':3,'basal_percent':3,'target':4,'variable_sens':5,'profile_percentage':5.1,'site_changes':5.2,'sensor_changes':5.3,
           'g_steps':6,'g_steps_cumulative':6.5,'g_hr':7,**{k:8+i/10 for i,k in enumerate(GROUP_KEYS['g_workout'])},'g_stress':9,'g_sleep':10,'g_waking_rr':11}
@@ -544,6 +548,11 @@ def schedule_changes(rows, fields):
 
 
 def add_profile_guides(fig, changes, dark):
+    # These guides use minutes since midnight. Elapsed-time Insights and
+    # relationship plots have different X units, so a guide at 10:00 (600)
+    # would be meaningless there and could also distort their autorange.
+    if (fig.layout.meta or {}).get('non_time'):
+        return
     fig.update_layout(meta=dict(fig.layout.meta or {},profile_changes=list(changes)))
     for value in changes:
         fig.add_shape(type='line',xref='x',yref='paper',x0=value,x1=value,y0=0,y1=1,
