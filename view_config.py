@@ -57,10 +57,6 @@ def saved_configurations(folder=None):
 
 def apply_configuration(config):
     from nightscout_charts import normalize_layers
-    st.session_state.ns_layers=normalize_layers(config['layers'])
-    st.session_state.ns_mode=config['mode']
-    st.session_state.health_date_view='One day' if config['mode']=='One day' else 'Date range'
-    st.session_state.health_median_mode=config['mode']=='Median + band'
     viewer=dict(config['viewer'])
     viewer.setdefault('defaultMode',config['mode'])
     garmin=dict(viewer.get('garmin') or {})
@@ -72,11 +68,23 @@ def apply_configuration(config):
     garmin['sleepFields']=selected;viewer['garmin']=garmin
     panels=viewer.get('customPanels',[])
     keys=[p['id'] for p in panels if isinstance(p,dict) and isinstance(p.get('id'),str) and re.fullmatch(r'custom-[0-9]+',p['id'])]
-    if not keys and 'Custom graph' in st.session_state.ns_layers:keys=['custom-1']
+    if not keys and 'Custom graph' in config['layers']:keys=['custom-1']
     st.session_state.health_custom_catalog=keys
-    st.session_state.health_custom_visible=[k for k in viewer.get('customVisible',keys) if k in keys] if 'Custom graph' in st.session_state.ns_layers else []
+    st.session_state.health_custom_visible=[k for k in viewer.get('customVisible',keys) if k in keys] if 'Custom graph' in config['layers'] else []
     st.session_state.health_view_config=viewer
     st.session_state.health_config_revision=st.session_state.get('health_config_revision',0)+1
+
+
+def delete_configuration(name,folder=None):
+    from configuration_trash import remove_saved
+    return remove_saved(name,folder or CONFIG_FOLDER,'profile-studio-view')
+
+
+def _delete_configuration(name):
+    try:
+        delete_configuration(name)
+        st.session_state.health_config_notice='Deleted graph configuration: '+name
+    except (ValueError,OSError) as exc:st.session_state.health_config_notice=str(exc)
 
 
 def configuration_controls():
@@ -85,4 +93,9 @@ def configuration_controls():
     for index,(name,config) in enumerate(configs):
         st.button(name,key=f'health_saved_config_{index}',on_click=apply_configuration,args=(config,),width='stretch')
     if not configs:st.caption('Name and save the current view in the graph toolbar. Saved views appear here.')
+    if configs:
+        with st.expander('Manage saved graph configurations'):
+            selected=st.selectbox('Configuration to remove',[name for name,_ in configs],key='health_delete_config_name')
+            st.button('Delete graph configuration',on_click=_delete_configuration,args=(selected,),width='stretch')
+            st.caption('Removes the saved settings. The current graphs stay open. Deleted settings are recoverable from graph_configurations/.trash.')
     for error in errors:st.warning(error)

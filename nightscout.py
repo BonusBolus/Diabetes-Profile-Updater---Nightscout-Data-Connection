@@ -126,6 +126,7 @@ class NightscoutClient:
             until = min(end, at + timedelta(days=7 if collection=="treatments" else 2))
             rows.extend(window(at, until))
             at = until
+            if getattr(self,'on_window',None):self.on_window(collection,start,at,len(rows))
         return rows
 
 
@@ -260,12 +261,18 @@ def normalize_data(entries, treatments, statuses, start, end):
     return data, warnings
 
 
-def load_nightscout(url, token, first, last, zone, categories=None):
+def load_nightscout(url, token, first, last, zone, categories=None, progress=None):
     start, end = utc_bounds(first, last, zone)
     client = NightscoutClient(url, token)
+    stage=0
+    if progress:
+        progress(0,5,'Glucose records')
+        client.on_window=lambda collection,a,b,count:progress(stage,5,f'{collection}: through {b:%d %b} · {count:,} records')
     selected=set(categories) if categories is not None else {'glucose','treatments','loop'}
     if not selected<={'glucose','treatments','loop'}:raise NightscoutError('Select supported Nightscout data categories.')
     entries = client.records("entries/sgv", start, end) if 'glucose' in selected else []
+    stage=1
+    if progress:progress(stage,5,'Treatments')
     successful=set(selected)
     warnings = []
     treatments_available = 'treatments' in selected
@@ -287,6 +294,8 @@ def load_nightscout(url, token, first, last, zone, categories=None):
                 warnings.append(f"The {event.lower()} crossing the start date could not be checked: " + str(exc))
     # Profile history is required by overlays even when treatment layers are off.
     # Reuse the full treatment load; otherwise fetch only requested/effective profiles.
+    stage=2
+    if progress:progress(stage,5,'Profile history and preceding events')
     profiles_available=treatments_available
     if not treatments_available:
         try:
@@ -311,13 +320,18 @@ def load_nightscout(url, token, first, last, zone, categories=None):
                     at=pd.to_datetime(record.get('created_at'),utc=True,errors='coerce')
                     if pd.notna(at) and at<start and record.get('isValid') is not False:alignment_events.append(dict(time=at,label=kind))
             except NightscoutError as exc:warnings.append('Earlier '+kind.lower()+' context was not available: '+str(exc))
+    stage=3
+    if progress:progress(stage,5,'IOB / COB / sensitivity records')
     try:
         statuses = client.records("devicestatus", start, end) if 'loop' in selected else []
     except NightscoutError as exc:
         statuses = []
         successful.discard('loop')
         warnings.append("IOB/COB were not loaded: " + str(exc))
+    stage=4
+    if progress:progress(stage,5,'Normalizing records')
     data, issues = normalize_data(entries, treatments, statuses, start, end)
+    if progress:progress(5,5,'Nightscout records ready')
     return {"data": data, "warnings": warnings + issues, "first": first, "last": last, "zone": zone,
             "site": client.url, "loaded_at": datetime.now(UTC),
             "availability": {"glucose": 'glucose' in selected, "treatments": treatments_available, "profiles": profiles_available},
@@ -346,9 +360,9 @@ def glucose_summary(frame, zone, days, unit):
     per_day = values.groupby(["day", "bin"])["value"].median()
     groups = per_day.groupby("bin")
     result = pd.DataFrame({"median": groups.median(), "low": groups.quantile(.25),
-                           "high": groups.quantile(.75), "days": groups.count()}).reindex(range(0, 1440, 5))
+                           "high": groups.quantile(.75), "p10": groups.quantile(.10), "p90": groups.quantile(.90), "average": groups.mean(), "days": groups.count()}).reindex(range(0, 1440, 5))
     if unit == "mmol/L":
-        result[["median", "low", "high"]] /= 18
+        result[["median", "low", "high", "p10", "p90", "average"]] /= 18
     return result.rename_axis("minute").reset_index()
 
 
@@ -407,10 +421,8 @@ def recorded_targets(treatments, temporary, start, end):
         at=max(at,start)
         if schedules is None or at>=stop:
             continue
-        # Schedules are wall-clock times. UTC minute boundaries preserve DST
-        # transitions; exact schedule boundaries are also included below.
+        # Only schedule events and UTC-offset transitions can change a step schedule.
         boundaries={at,stop}
-        boundaries.update(pd.date_range(at.replace(second=0,microsecond=0)+timedelta(minutes=1),stop,freq='1min').to_pydatetime())
         day=at.astimezone(zone).date()
         last=stop.astimezone(zone).date()
         while day<=last:
@@ -419,9 +431,22 @@ def recorded_targets(treatments, temporary, start, end):
                     naive=datetime.combine(day,time.min)+timedelta(seconds=seconds)
                     for fold in (0,1):
                         boundary=naive.replace(tzinfo=zone,fold=fold).astimezone(UTC)
-                        if at<boundary<stop:
+                        # Skip nonexistent spring-forward wall-clock instants.
+                        if at<boundary<stop and boundary.astimezone(zone).replace(tzinfo=None)==naive:
                             boundaries.add(boundary)
             day+=timedelta(days=1)
+        cursor=at
+        while cursor<stop:
+            probe=min(stop,cursor+timedelta(hours=6))
+            if cursor.astimezone(zone).utcoffset()!=probe.astimezone(zone).utcoffset():
+                lo,hi=int(cursor.timestamp()),int(probe.timestamp())
+                offset=cursor.astimezone(zone).utcoffset()
+                while hi-lo>1:
+                    mid=(lo+hi)//2
+                    if datetime.fromtimestamp(mid,UTC).astimezone(zone).utcoffset()==offset:lo=mid
+                    else:hi=mid
+                boundaries.add(datetime.fromtimestamp(hi,UTC))
+            cursor=probe
         boundaries=sorted(boundaries)
         for a,b in zip(boundaries,boundaries[1:]):
             local=a.astimezone(zone)

@@ -1,5 +1,10 @@
 // Display-only transforms. Source samples stay immutable in the trace bank.
 const garminOptions={stressSmooth:false,stressLine:false,pace:false,stressTau:5,aggregation:"Average",stepsHistogram:false,sleepFields:[],sleepOverlay:false,sleepDistribution:true,glucoseActivities:false,activityShading:true,activity:{}};
+const defaultGarminOptions=JSON.parse(JSON.stringify(garminOptions));
+function restoredGarminOptions(raw=garminOptions){
+  raw=raw&&typeof raw==='object'?raw:garminOptions;
+  return JSON.parse(JSON.stringify({...defaultGarminOptions,...raw,sleepFields:Array.isArray(raw?.sleepFields)?raw.sleepFields:[],activity:raw?.activity&&typeof raw.activity==='object'?raw.activity:{}}));
+}
 const garminButtons=[],stressSliders=[],sleepButtons=[],activitySliders=[],activityButtons=[],activityFloors=[];
 const activitySignals=['g_workout_hr','g_workout_cadence','g_workout_speed','g_workout_altitude','g_workout_power'];
 const activityFloorSignals=activitySignals.filter(key=>key!=='g_workout_altitude');
@@ -64,12 +69,12 @@ function garminControls(bar,spec) {
   const options=key==='g_stress'?[['stressSmooth','Low-pass'],['stressLine','Line']]:
     key==='g_workout_speed'?[['pace','Pace · min/km']]:[];
   if(key==='g_steps')options.push(['stepsHistogram','Histogram']);
-  if(['g_steps','g_stress','g_sleep'].includes(key) && navigation?.mode!=='One day')options.push(['aggregation','Bars: Average']);
+  if(['g_steps','g_stress','g_sleep'].includes(key))options.push(['aggregation','Bars: Average']);
   if(key==='g_stress')smoothingControl(settings,key,id);
   if(activitySignals.includes(key))activityGraphControls(settings,spec,areas.axis);
   if(key==='g_sleep') {
     options.push(['sleepOverlay','Sleep: Underneath']);
-    if(selectedDays.length>1)options.push(['sleepDistribution','Hourly sleep distribution']);
+    options.push(['sleepDistribution','Hourly sleep distribution']);
     const details=document.createElement('details'),summary=document.createElement('summary');summary.textContent='Sleep overlays';details.appendChild(summary);
     const choices=document.createElement('div');choices.className='custom-options';details.appendChild(choices);areas.content.appendChild(details);
     for(const [field,label] of Object.entries(sleepFields)) {
@@ -103,8 +108,14 @@ function lowPass(xs,ys,tau=garminOptions.stressTau) {
     previous=x;return average;
   });
 }
+function customLayerOptions(layout,dataset){
+  const options=displayOptions(layout);if(layout.meta?.kind!=='custom')return options;
+  const state=customState(layout.meta.custom_id),field=customFields.find(f=>state.selected.has(f.id)&&f.dataset===dataset),own=state.fieldOptions[field?.id] || {};
+  return {...options,aggregation:own.aggregation || 'Average',stressLine:own.style!=='Bars' || own.smooth===true};
+}
 function transformGarmin(view,index) {
-  const panel=view.layout.meta?.dataset,options=displayOptions(view.layout);
+  const panel=view.layout.meta?.dataset,options=customLayerOptions(view.layout,'g_sleep');
+  const stressBars=()=>{const o=customLayerOptions(view.layout,'g_stress');return (panel==='g_stress' || view.layout.meta?.kind==='custom') && !o.stressSmooth && !o.stressLine;};
   view.data=view.data.filter(t=>!t.meta?.sleep_variant || (t.meta.sleep_variant===(options.sleepDistribution?'hourly':'stages') && (!t.meta.aggregation || t.meta.aggregation===options.aggregation)));
   if(view.layout.meta?.display_mode==='Median + band' && !dateCycled){
     const sleepAxis=panel==='g_sleep'?view.layout.yaxis:index===0 && currentOverlay==='Garmin · Sleep'?view.layout.yaxis2:null;
@@ -123,32 +134,35 @@ function transformGarmin(view,index) {
   }
   view.data=view.data.filter(t=>{
     if(t.meta?.dataset!=='g_steps')return true;
-    if(t.meta.aggregation && t.meta.aggregation!==options.aggregation)return false;
+    if(t.meta.aggregation && t.meta.aggregation!==customLayerOptions(view.layout,'g_steps').aggregation)return false;
     t.visible=true;return true;
   });
-  view.data=view.data.filter(t=>!(t.meta?.kind==='garmin_band' && (t.meta.dataset==='g_sleep_restless' || (t.meta.dataset==='g_stress' && panel==='g_stress' && !options.stressSmooth && !options.stressLine))));
+  view.data=view.data.filter(t=>!(t.meta?.kind==='garmin_band' && (t.meta.dataset==='g_sleep_restless' || (t.meta.dataset==='g_stress' && stressBars()))));
   for(const t of view.data) {
     const activity=activityOptions(t.meta?.dataset,options);
     if(activitySignals.includes(t.meta?.dataset) && activity.smooth && t.meta.kind!=='garmin_band'){
+      if(t.meta.summary)for(const q of ['p10','p90'])t.meta.summary[q]=lowPass(t.x,t.meta.summary[q],activity.tauSeconds/60);
       t.y=lowPass(t.x,t.y,activity.tauSeconds/60);t.meta.label+=' · '+smoothingLabel(activity.tauSeconds)+' low-pass';
     }
     if(t.meta?.dataset==='g_workout_speed' && ['km/h','mph'].includes(t.meta.unit)) {
       const factor=t.meta.unit==='mph'?1.609344:1;
+      if(t.meta.summary){const convert=values=>values.map(v=>!Number.isFinite(v)?null:options.pace?(v>0?60/(v*factor):null):v*factor);const lo=convert(t.meta.summary.p10),hi=convert(t.meta.summary.p90);t.meta.summary.p10=options.pace?hi:lo;t.meta.summary.p90=options.pace?lo:hi;}
       t.y=t.y.map(v=>!Number.isFinite(v)?null:options.pace?(v>0?60/(v*factor):null):v*factor);
       t.meta.unit=options.pace?'min/km':'km/h';if(t.meta.kind!=='garmin_band'){t.meta.label=options.pace?'Activity pace':'Activity speed';t.name=t.meta.label;}
       const axis=view.layout['yaxis'+(t.yaxis || 'y').slice(1)];
       if(axis){axis.title={...axis.title,text:t.meta.unit};axis.autorange=options.pace?'reversed':true;axis.rangemode='normal';delete axis.range;}
     }
     const key=t.meta?.dataset;
-    if((key==='g_sleep_restless' || key==='g_stress' && panel==='g_stress' && !options.stressSmooth && !options.stressLine) && t.meta?.kind==='median' && t.meta.average) {
-      t.y=t.meta[options.aggregation==='Average'?'average':'median'];
-      t.meta.label=options.aggregation+' '+(key==='g_stress'?'stress':'restless moments');t.name=t.meta.label;
+    if((key==='g_sleep_restless' || key==='g_stress' && stressBars()) && t.meta?.kind==='median' && t.meta.average) {
+      const aggregation=customLayerOptions(view.layout,key).aggregation;
+      t.y=t.meta[aggregation==='Average'?'average':'median'];
+      t.meta.label=aggregation+' '+(key==='g_stress'?'stress':'restless moments');t.name=t.meta.label;
     }
     if(key==='g_sleep_restless' && t.meta.kind!=='garmin_band')makeGarminBar(t,'#ef5350',t.meta.kind==='median'?5:1);
     if(key!=='g_stress' || t.meta.kind==='garmin_band')continue;
-    if(options.stressSmooth){t.y=lowPass(t.x,t.y,options.stressTau);if(t.meta.label)t.meta.label+=' · '+options.stressTau+'-min low-pass';}
+    if(options.stressSmooth){if(t.meta.summary)for(const q of ['p10','p90'])t.meta.summary[q]=lowPass(t.x,t.meta.summary[q],options.stressTau);t.y=lowPass(t.x,t.y,options.stressTau);if(t.meta.label)t.meta.label+=' · '+options.stressTau+'-min low-pass';}
     t.marker={...t.marker,color:t.y.map(v=>Number.isFinite(v)?stressColor(v):'#888'),size:4};
-    if(panel==='g_stress' && t.meta?.kind!=='garmin_band' && !options.stressSmooth && !options.stressLine)makeGarminBar(t,t.marker.color,t.meta.kind==='median'?5:(view.layout.meta?.display_mode==='Multiple days' && selectedDays.length>7)?5:1);
+    if(stressBars() && t.meta?.kind!=='garmin_band')makeGarminBar(t,t.marker.color,t.meta.kind==='median'?5:(view.layout.meta?.display_mode==='Multiple days' && selectedDays.length>7)?5:1);
 
   }
   if(panel==='g_workout_speed' && options.pace && ['Metric','Statute'].includes(navigation?.garmin_units))view.layout.title.text=view.layout.title.text.replace('Activity speed','Activity pace');
@@ -188,19 +202,30 @@ async function changeGarminOption(option,value,dataset=null,id=null) {
     finally{syncing=false;controls();}
   });
 }
+function sleepDimensions(dateCount,detailCount,overlay=false) {
+  const dayHeight=navigation?.sleep_day_height || 28;
+  const stage=Math.max(100,dateCount*dayHeight),row=65,chrome=90;
+  return {stage,row,chrome,height:Math.max(210,stage+(overlay?0:detailCount*row)+chrome)};
+}
 function composeSleep(view) {
   if(view.layout.meta?.dataset!=='g_sleep')return;
+  delete view.layout.meta.automation_axis;delete view.layout.meta.automation_scale;
   const options=displayOptions(view.layout);
   const enabled=options.sleepFields.filter(k=>(view.layout.meta.sleep_fields || []).includes(k) &&
     view.data.some(t=>t.meta?.dataset===k && t.y?.some(Number.isFinite)));
   view.data=view.data.filter(t=>!t.meta?.sleep_overlay || enabled.includes(t.meta.dataset));
   const dates=[...new Set(view.data.filter(t=>t.meta?.kind==='garmin_sleep').map(t=>t.meta.date))];
   const dayHeight=navigation?.sleep_day_height || 28;
-  const stageHeight=Math.max(150,dates.length*dayHeight),total=stageHeight+enabled.length*100;
+  const size=sleepDimensions(dates.length,enabled.length,options.sleepOverlay);
+  const stageHeight=size.stage,total=stageHeight+enabled.length*size.row;
+  view.layout.height=size.height;
+  view.layout.margin={...view.layout.margin,t:30,b:48};
+  view.layout.yaxis.title={text:dates.length?'Stage':options.sleepDistribution?'h/h':'%',font:{size:11},standoff:3};
+  view.layout.annotations=(view.layout.annotations || []).filter(a=>!a.name?.startsWith('Sleep metric | '));
   for(const name of Object.keys(view.layout))if(/^yaxis[0-9]+$/.test(name))delete view.layout[name];
   view.layout.meta.sleep_details=enabled.length>0;
   if(options.sleepOverlay && enabled.length) {
-    view.layout.height=Math.max(350,stageHeight+150);view.layout.yaxis.domain=[0,1];view.layout.xaxis.anchor='y';
+    view.layout.yaxis.domain=[0,1];view.layout.xaxis.anchor='y';
     const units=[...new Set(enabled.map(key=>view.data.find(t=>t.meta?.dataset===key)?.meta.unit || ''))];
     customAxisLayout(view.layout,units.length+1);
     Object.assign(view.layout.yaxis,customAxisPosition(0));
@@ -216,17 +241,19 @@ function composeSleep(view) {
     // Keep stages legible while optional signals occupy the same plot area.
     for(const t of view.data.filter(t=>t.meta?.dataset==='g_sleep'))t.opacity=.55;
   } else {
-    view.layout.yaxis.domain=[enabled.length*100/total,1];view.layout.height=total+150;
+    view.layout.yaxis.domain=[enabled.length*size.row/total,1];
     view.layout.xaxis.anchor=enabled.length?'y'+(enabled.length+1):'y';
     enabled.forEach((key,i)=>{
-      const axis='y'+(i+2),upper=(enabled.length-i)*100/total;
+      const axis='y'+(i+2),upper=(enabled.length-i)*size.row/total;
       const unit=view.data.find(t=>t.meta?.dataset===key)?.meta.unit || '';
-      view.layout['yaxis'+(i+2)]={domain:[Math.max(0,upper-85/total),upper-10/total],title:{text:sleepFields[key]+' ('+unit+')',font:{size:11}},
-        tickfont:{size:11},showgrid:true,automargin:true,rangemode:key==='g_sleep_restless'?'tozero':'normal',autorange:true};
+      view.layout['yaxis'+(i+2)]={domain:[Math.max(0,upper-(size.row-5)/total),upper-18/total],title:{text:unit,font:{size:10},standoff:3},
+        tickfont:{size:10},nticks:3,showgrid:true,automargin:true,rangemode:key==='g_sleep_restless'?'tozero':'normal',autorange:true};
+      view.layout.annotations.push({name:'Sleep metric | '+key,text:sleepFields[key],xref:'x domain',yref:'paper',x:0,y:upper-4/total,
+        xanchor:'left',yanchor:'top',showarrow:false,font:{size:10}});
       for(const t of view.data.filter(t=>t.meta?.dataset===key)){t.yaxis=axis;t.visible=true;}
     });
   }
-  for(const t of view.data.filter(t=>t.meta?.kind==='garmin_sleep'))t.line.width=dates.length<=1?120:dayHeight*.78;
+  for(const t of view.data.filter(t=>t.meta?.kind==='garmin_sleep'))t.line.width=dates.length<=1?72:dayHeight*.78;
 }
 function garminControlState() {
   for(const {button,option,key,id} of garminButtons){
@@ -234,7 +261,7 @@ function garminControlState() {
     button.disabled=!ready || syncing || (option==='aggregation' && dateCycled) || (key==='g_workout_speed' && !['Metric','Statute'].includes(navigation?.garmin_units));
     
     if(option==='sleepOverlay')button.textContent='Sleep: '+(graphOptions(id).sleepOverlay?'Overlay':'Underneath');
-    if(option==='sleepDistribution')button.hidden=!dateCycled && (panelStates.get(id)?.mode!=='Median + band') || selectedDays.length<2;
+    if(option==='sleepDistribution'){button.hidden=false;button.disabled ||= dateCycled || panelStates.get(id)?.mode!=='Median + band' || selectedDays.length<2;}
     if(option==='sleepDistribution')button.textContent=graphOptions(id).sleepDistribution?'Sleep: hourly distribution':'Sleep: stage composition';
     if(option==='aggregation'){
       button.textContent=(key==='g_sleep'?'Sleep bars':key==='g_stress'?'Stress bars':'Step bars')+': '+graphOptions(id).aggregation;
@@ -243,6 +270,7 @@ function garminControlState() {
       if(key==='g_sleep' && !graphOptions(id).sleepDistribution && !graphOptions(id).sleepFields.includes('g_sleep_restless'))button.hidden=true;
       if(key==='g_sleep' && !graphOptions(id).sleepDistribution)button.textContent='Restless bars: '+graphOptions(id).aggregation;
       if(key==='g_steps' && !graphOptions(id).stepsHistogram)button.hidden=true;
+      if(key==='g_sleep'){button.hidden=false;button.disabled ||= selectedDays.length<2 || dateCycled || panelStates.get(id)?.mode!=='Median + band';}
     }
   }
   for(const {slider,value,id} of stressSliders){if(!slider.editing){slider.value=String(graphOptions(id).stressTau);value.textContent='Smoothing: '+smoothingLabel(graphOptions(id).stressTau*60);}slider.disabled=!ready || !graphOptions(id).stressSmooth;}
@@ -278,10 +306,11 @@ function workoutAxisUpdates(data,layout,range) {
   }
   if(layout.meta?.kind==='custom') {
     const view={data,layout:JSON.parse(JSON.stringify(layout))};
+    if(range)view.layout.xaxis.range=range.slice();
     for(const [key,value] of Object.entries(result)){const [axis,field]=key.split('.');view.layout[axis][field]=value;}
     applyCustomRanges(view);
     const state=customState(layout.meta.custom_id);
-    for(const [axis,key] of Object.entries(layout.meta.custom_axes || {}))if(state.axisRanges[key]?.some(v=>v!==null)){
+    for(const [axis,key] of Object.entries(layout.meta.custom_axes || {}))if(state.axisRanges[key]?.some(v=>v!==null) || customFields.some(f=>state.selected.has(f.id) && customAxisKey(state,customDisplayField(f,state))===key && state.fieldOptions[f.id]?.visualOffset)){
       result[axis+'.range']=view.layout[axis].range;result[axis+'.autorange']=false;
     }
   }
@@ -298,7 +327,7 @@ function setupActivityControls() {
   const bar=top?controlAreas(top).settings:parent?controlAreas(parent).settings:null;
   if(!bar || !['Metric','Statute'].includes(navigation?.garmin_units) && !(navigation?.activity_bands || []).length)return;
   const group=settingsGroup(bar,'Activity');
-  activityShadingControl(group);
+
   activitySelect=document.createElement('select');activitySelect.setAttribute('aria-label','Recorded activity');group.appendChild(activitySelect);
   fitActivityButton=document.createElement('button');fitActivityButton.textContent='Fit time axis to activity';fitActivityButton.type='button';group.appendChild(fitActivityButton);
   fullDayButton=document.createElement('button');fullDayButton.textContent='Full day';fullDayButton.type='button';group.appendChild(fullDayButton);
@@ -327,8 +356,15 @@ function activityControlState() {
 }
 async function setTimeRange(range) {
   syncing=true;controls();clearHover();
-  try{await Promise.all(graphs.filter(g=>!g.layout.meta?.non_time).map(g=>Plotly.relayout(g,{
-    'xaxis.range':range,'xaxis.autorange':false,...workoutAxisUpdates(g.data,g.layout,range)}).then(()=>reflowProfileLabels(g))));}
+  try{await Promise.all(graphs.filter(g=>g._fullLayout && !g.layout.meta?.non_time).map(g=>{
+    const local=panelTimeRange(graphs.indexOf(g),range),updates={};
+    for(const key of Object.keys(g.layout).filter(k=>/^xaxis\d*$/.test(k)&&g._fullLayout[k])){
+      updates[key+'.range']=local;updates[key+'.autorange']=false;
+      if(g.layout.meta?.kind!=='insight')for(const [option,value] of Object.entries(timeAxisTicks(local,g._fullLayout[key]._length)))updates[key+'.'+option]=value;
+    }
+    for(const [key,value] of Object.entries(workoutAxisUpdates(g.data,g.layout,local)))if(g._fullLayout[key.split('.')[0]])updates[key]=value;
+    return (Object.keys(updates).length?Plotly.relayout(g,updates):Promise.resolve()).then(()=>reflowProfileLabels(g));
+  }));}
   finally{syncing=false;controls();}
 }
 
@@ -369,11 +405,12 @@ function controlAreas(bar) {
   const content=document.createElement('div');content.className='graph-content';
   const label=document.createElement('span');label.className='control-label';label.textContent='Overlays';content.appendChild(label);
   const settings=document.createElement('div');settings.className='graph-settings';
-  const title=document.createElement('span');title.className='control-label';title.textContent='Graph settings';settings.appendChild(title);
+  const title=document.createElement('span');title.className='control-label';title.textContent='Settings';settings.appendChild(title);
   const body=document.createElement('div');body.className='settings-body';settings.appendChild(body);
   const axis=document.createElement('div');axis.className='axis-controls';
-  bar.appendChild(settings);bar.appendChild(content);
-  return bar.graphAreas={content,settings:body,axis};
+  const actions=document.createElement('div');actions.className='graph-actions';const caption=document.createElement('span');caption.className='control-label';caption.textContent='Graph actions';actions.appendChild(caption);
+  bar.appendChild(actions);bar.appendChild(settings);bar.appendChild(content);
+  return bar.graphAreas={content,settings:body,axis,actions};
 }
 
 
@@ -385,7 +422,8 @@ function settingsGroup(bar,title) {
 const eventScopes={site:'glucose',sensor:'glucose',profiles:'off',percentage:'off',automation:'off',activity:'all'};
 const eventSelects=[];
 function eventAllowed(view,key){
-  const scope=eventScopes[key];
+  const own=panelStates.get(view.layout.meta?.panel_id)?.events?.[key];
+  const scope=own==='show'?'all':own==='hide'?'off':eventScopes[key];
   if(scope==='off' || view.layout.meta?.non_time)return false;
   const glucose=view.layout.meta?.dataset==='glucose' || (view.data || []).some(t=>t.meta?.kind==='glucose' || t.meta?.dataset==='glucose');
   return scope==='all' || glucose;
@@ -413,14 +451,19 @@ function eventScopeControl(parent,key,text){
 function setupChangeControls() {
   const top=document.getElementById('top-graph-controls');
   const bar=top?controlAreas(top).settings:controlAreas(document.getElementById('toolbar-left') || document.getElementById('viewer')).settings;
-  const group=settingsGroup(bar,'Events');
-  for(const [key,text] of [['site','Site changes'],['sensor','Sensor changes'],['profiles','Profile switches'],['percentage','Profile % shading'],['automation','Automation notes']])eventScopeControl(group,key,text);
+  const details=document.createElement('details');details.className='graph-events';const heading=document.createElement('summary');heading.textContent='Global event defaults';details.appendChild(heading);bar.appendChild(details);
+  const group=settingsGroup(details,'Events');
+  for(const [key,text] of [['activity','Activity shading'],['site','Site changes'],['sensor','Sensor changes'],['profiles','Profile switches'],['percentage','Profile % shading'],['automation','Automation notes']])eventScopeControl(group,key,text);
 }
 function eventControlState(){
   for(const {key,select} of eventSelects){
     select.value=eventScopes[key];select.disabled=!ready || syncing || (['profiles','percentage'].includes(key) && !navigation?.profile_events?.length);
     if(['profiles','percentage'].includes(key) && !navigation?.profile_events?.length)select.title='No effective profile records loaded. Refresh Nightscout to check availability.';
   }
+}
+function changeEventText(event,dated=selectedDays.length>1){
+  const clock=String(Math.floor(event.minute/60)).padStart(2,'0')+':'+String(Math.floor(event.minute%60)).padStart(2,'0');
+  return (dated?event.date+' · ':'')+(event.label==='Site Change'?'Site':'Sensor')+' '+clock;
 }
 function applyChangeEvents(view,index) {
   view.layout.shapes=(view.layout.shapes || []).filter(s=>!s.name?.startsWith('Change | '));
@@ -430,8 +473,7 @@ function applyChangeEvents(view,index) {
     if(!selectedDays.includes(event.date))continue;
     const site=event.label==='Site Change',color=site?'#557dce':'#b45bb5';
     if(!eventAllowed(view,site?'site':'sensor'))continue;
-    const clock=String(Math.floor(event.minute/60)).padStart(2,'0')+':'+String(Math.floor(event.minute%60)).padStart(2,'0');
-    const text=(selectedDays.length>1?event.date+' · ':'')+(site?'Site':'Sensor')+' '+clock;
+    const text=changeEventText(event);
     const name='Change | '+event.date+' | '+event.label+' | '+event.minute;
     view.layout.shapes.push({type:'line',name,
       xref:'x',yref:'paper',x0:event.minute,x1:event.minute,y0:0,y1:1,line:{color,width:1.5,dash:'dot'}});
@@ -456,18 +498,19 @@ function profileLineStyle(name){
   const names=[...new Set((navigation?.profile_events || []).map(e=>e.name))].sort();
   return {color:'#a173cb',width:1.35,dash:dashes[names.indexOf(name)%dashes.length]};
 }
+function profileEventText(event){return event.name+(Number.isFinite(event.percentage)?' · '+event.percentage+'%':'');}
 function applyProfileEvents(view) {
   view.layout.shapes=(view.layout.shapes || []).filter(s=>!s.name?.startsWith('Effective | ') && !s.name?.startsWith('Profile · '));
   view.layout.annotations=(view.layout.annotations || []).filter(s=>!s.name?.startsWith('Effective | '));
   if(view.layout.meta?.non_time)return;
-  const seen=new Set();
+  const seen=new Set(),labelsByEvent=new Map();
   view.data=(view.data || []).filter(t=>t.meta?.kind!=='profile_event');
   const aux=1+Math.max(1,...Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k)).map(k=>Number(k.slice(5)) || 1));
   const eventAxis='y'+aux;
   const events=(navigation?.profile_events || []).filter(e=>selectedDays.includes(e.date)).sort((a,b)=>a.minute-b.minute);
   view.layout.meta={...view.layout.meta,profile_label_levels:0,percentage_max:100};
   for(const event of navigation?.profile_events || []){
-    const p=event.percentage,text=event.name+(Number.isFinite(p)?' · '+p+'%':'');
+    const p=event.percentage,text=profileEventText(event);
     const name='Effective | '+event.date+' | '+event.minute+' | '+text;
     if(eventAllowed(view,'percentage') && Number.isFinite(p) && p!==100){
       for(const part of event.intervals || [])if(selectedDays.includes(part.date)){
@@ -479,7 +522,7 @@ function applyProfileEvents(view) {
   // Aggregate views retain actual dated events as context, never average switches.
   if(!eventAllowed(view,'profiles')){profileEventLayout(view.layout);return;}
   for(const event of events){
-    const p=event.percentage,text=event.name+(Number.isFinite(p)?' · '+p+'%':'');
+    const p=event.percentage,text=profileEventText(event);
     const name='Effective | '+event.date+' | '+event.minute+' | '+text,line=profileLineStyle(event.name);
     view.layout.shapes.push({type:'line',name,xref:'x',yref:'paper',x0:event.minute,x1:event.minute,y0:0,y1:1,
       line,showlegend:!seen.has(event.name),legendgroup:'profile-switch-'+event.name,legendrank:90,
@@ -491,41 +534,42 @@ function applyProfileEvents(view) {
     view.layout['yaxis'+aux]={overlaying:'y',range:[0,1],autorange:false,visible:false,fixedrange:true,showgrid:false};
     view.data.push({type:'scatter',x:Array(51).fill(event.minute),y:Array.from({length:51},(_,i)=>i/50),yaxis:eventAxis,mode:'lines',line:{color:'rgba(161,115,203,.01)',width:10},showlegend:false,
       meta:{kind:'profile_event',label:event.name,percentage:p,date:event.date,legend_entry:false},hovertemplate:event.name+'<extra></extra>'});
-    view.layout.annotations.push({name,xref:'x',yref:'paper',x:event.minute,y:-.001,text:(selectedDays.length>1?event.date+' · ':'')+event.name,showarrow:false,yanchor:'top',font:{size:10,color:line.color}});
-    if(Number.isFinite(p))view.layout.annotations.push({name,xref:'x',yref:'paper',x:event.minute,y:1.015,
-      text:p+'%',hovertext:event.date+' · '+text,showarrow:false,yanchor:'bottom',font:{size:10,color:line.color}});
+    const key=event.minute+'|'+text,existing=labelsByEvent.get(key);
+    if(existing)existing.hovertext+='; '+event.date;
+    else{
+      const label={name,xref:'x',yref:'paper',x:event.minute,y:-.001,text,hovertext:event.date+' · '+text,
+        showarrow:false,yanchor:'top',font:{size:navigation?.report_render?.compact?9:10,color:line.color}};
+      view.layout.annotations.push(label);labelsByEvent.set(key,label);
+    }
   }
   if(seen.size)view.layout.showlegend=true;
   profileEventLayout(view.layout);
 }
 
 function profileEventLayout(layout,plotWidth=null){
+  if(layout.meta?.kind==='compact'){compactLayout(layout,plotWidth);return;}
   // Recompute at the final plot width, including resize, expanded view and PDF.
   // Compare full text boxes rather than just the distance between event times.
   const range=layout.xaxis?.range || [0,1440],span=range[1]-range[0];
   const width=Math.max(100,plotWidth || (layout.width || 1000)-(layout.margin?.l || 62)-(layout.margin?.r || 62));
-  const labels=(layout.annotations || []).filter(a=>a.name?.startsWith('Effective | ') && a.y<0 && a.x>=range[0] && a.x<=range[1]).sort((a,b)=>a.x-b.x);
-  const lanes=[],percentages=new Map((layout.annotations || []).filter(a=>a.name?.startsWith('Effective | ') && a.y>1).map(a=>[a.name,a]));
+  const dense=navigation?.report_render?.compact,rowHeight=dense?12:18;
+  const labels=(layout.annotations || []).filter(a=>a.name?.startsWith('Effective | ') && a.y<0).sort((a,b)=>a.x-b.x);
+  const lanes=[];
   for(const label of labels){
-    const size=Math.max(label.text.length*(label.font?.size || 10)*.65,36)+14;
+    label.visible=label.x>=range[0] && label.x<=range[1];if(!label.visible)continue;
+    const size=Math.min(width,Math.max(label.text.length*(label.font?.size || 10)*.65,36)+14);
     const center=(label.x-range[0])*width/span;
-    let left=Math.max(0,Math.min(width-size,center-size/2));
-    let lane=lanes.findIndex(end=>left>=end);
-    if(lane<0 && lanes.length>=3){
-      lane=lanes.indexOf(Math.min(...lanes));left=Math.max(left,lanes[lane]);
-      if(left+size>width)lane=-1;
-    }
-    if(lane<0){lane=lanes.length;lanes.push(0);left=Math.max(0,Math.min(width-size,center-size/2));}
+    const left=Math.max(0,Math.min(width-size,center-size/2));
+    let lane=lanes.findIndex(end=>left>=end+6);
+    if(lane<0){lane=lanes.length;lanes.push(0);}
     lanes[lane]=left+size;
-    label.xanchor='left';label.xshift=left-center+7;label.yshift=-28-lane*18;
-    const percent=percentages.get(label.name);
-    if(percent){percent.xanchor='left';percent.xshift=label.xshift;percent.yshift=lane*16;}
+    label.xanchor='left';label.xshift=left-center+7;label.yshift=-(dense?18:28)-lane*rowHeight;
   }
   layout.meta={...layout.meta,profile_label_levels:lanes.length};
   const levels=layout.meta?.profile_label_levels || 0,overflow=Math.max(0,(layout.meta?.percentage_max || 100)/100-1);
   if(!levels && !overflow)return;
-  const bottom=Math.max(layout.margin?.b || 0,levels?64+Math.max(0,levels-1)*18:62);
-  const baseTop=Math.max(36,levels?45+Math.max(0,levels-1)*16:36);
+  const bottom=Math.max(layout.margin?.b || 0,levels?(dense?44:64)+Math.max(0,levels-1)*rowHeight:dense?32:62);
+  const baseTop=dense?20:36;
   const room=Math.max(40,(layout.height || 350)-bottom-baseTop);
   // Above-100% shade belongs in dedicated headroom, never over the title.
   layout.margin={...layout.margin,b:bottom,t:baseTop+Math.ceil(room*overflow/(1+overflow))};
@@ -533,36 +577,105 @@ function profileEventLayout(layout,plotWidth=null){
 }
 function profileEventLegendPosition(layout){
   if(!(layout.annotations || []).some(a=>a.name?.startsWith('Effective | ') && a.y<0))return;
+  if(navigation?.report_render){layout.legend={...layout.legend,yref:'container',y:0,yanchor:'bottom'};return;}
   const height=Math.max(40,(layout.height || 350)-(layout.margin?.t || 36)-(layout.margin?.b || 65));
   const levels=layout.meta?.profile_label_levels || 1;
-  layout.legend={...layout.legend,y:-(45+Math.max(0,levels-1)*18)/height,yanchor:'top'};
+  const dense=navigation?.report_render?.compact;
+  layout.legend={...layout.legend,y:-((dense?31:45)+Math.max(0,levels-1)*(dense?12:18))/height,yanchor:'top'};
 }
 
 async function reflowProfileLabels(div){
-  if(!(div.layout.annotations || []).some(a=>a.name?.startsWith('Effective | ') && a.y<0))return;
+  if(div.layout.meta?.kind==='compact' && !div.layout.yaxis4)return;
+  if(div.layout.meta?.kind!=='compact' && !(div.layout.annotations || []).some(a=>a.name?.startsWith('Effective | ') && a.y<0))return;
   const width=div._fullLayout?.xaxis?._length;
   if(!Number.isFinite(width))return;
   // Automargins and multiple axes can reduce the real plot width after layout.
   const layout=JSON.parse(JSON.stringify(div.layout));profileEventLayout(layout,width);
+  if(layout.meta.kind==='compact')compactAmountLabels({data:div.data,layout},width);
   if(JSON.stringify(layout.annotations)===JSON.stringify(div.layout.annotations))return;
-  await Plotly.relayout(div,{annotations:layout.annotations,margin:layout.margin,legend:layout.legend,meta:layout.meta});
+  const updates={annotations:layout.annotations,margin:layout.margin,legend:layout.legend,meta:layout.meta};
+  if(layout.meta.kind==='compact'){
+    Object.assign(updates,{height:layout.height,shapes:layout.shapes});
+    // Plotly omits unused axes on days without data. Relayout of a missing
+    // domain otherwise crashes inside Plotly while accessing _inputDomain.
+    for(const key of ['yaxis','yaxis4'])if(div._fullLayout?.[key] && layout[key]?.domain)updates[key+'.domain']=layout[key].domain;
+  }
+  await Plotly.relayout(div,updates);
 }
 
+function automationReportLabels(view,events,aux,height,top){
+  const range=view.layout.xaxis.range || [0,1440],span=Math.max(1,range[1]-range[0]);
+  const width=Math.max(100,(view.layout.width || 1000)-(view.layout.margin?.l || 62)-(view.layout.margin?.r || 62));
+  const rail=(1-top)*height,boxes=[],groups=new Map();
+  const family='Arial, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+  const context=document.createElement('canvas').getContext('2d');context.font='8px '+family;
+  for(const e of events)if(e.minute>=range[0]&&e.minute<=range[1])groups.set(e.minute+'|'+e.label,e);
+  let crowded=false;
+  for(const e of [...groups.values()].sort((a,b)=>a.minute-b.minute)){
+    const px=(e.minute-range[0])*width/span,py=rail*.88;
+    const text=String(e.label),w=Math.ceil(context.measureText(text).width)+8;
+    const p=placeGraphText(px,py,w,{width,bottom:6,top:rail-6,boxes,direction:-1,step:12,textHeight:10});
+    if(!p){crowded=true;continue;}boxes.push(p.box);
+    const safe=text.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const a={name:'Automation label | '+e.minute+' | '+e.label,text:safe,xref:'x',x:e.minute,font:{size:8,color:'#327b77',family},borderpad:1,bgcolor:view.layout.plot_bgcolor};
+    if(p.direct)Object.assign(a,{yref:'y'+aux,y:p.cy/rail,xshift:p.cx-px,showarrow:false,xanchor:'center',yanchor:'middle'});
+    else Object.assign(a,{yref:'y'+aux,y:.88,ax:p.cx-px,ay:py-p.cy,showarrow:true,arrowhead:0,arrowwidth:.5,arrowcolor:'rgba(65,140,135,.4)',standoff:3});
+    view.layout.annotations.push(a);
+  }
+  // When a fixed-height slot is too dense, print the complete notes in a tiny time key.
+  view.layout.meta.automation_print_key=crowded?[...groups.values()].map(e=>String(Math.floor(e.minute/60)).padStart(2,'0')+':'+String(Math.floor(e.minute%60)).padStart(2,'0')+' · '+e.label).join('; '):'';
+}
+function automationReportRail(view,events){
+  const range=view.layout.xaxis.range || [0,1440],span=Math.max(1,range[1]-range[0]);
+  const width=Math.max(100,(view.layout.width || 1000)-(view.layout.margin?.l || 62)-(view.layout.margin?.r || 62));
+  const context=document.createElement('canvas').getContext('2d');context.font='8px Arial, "Segoe UI Emoji", "Apple Color Emoji", "Noto Color Emoji", sans-serif';
+  const unique=new Map(events.filter(e=>e.minute>=range[0]&&e.minute<=range[1]).map(e=>[e.minute+'|'+e.label,e]));
+  const lanes=[];
+  for(const e of [...unique.values()].sort((a,b)=>a.minute-b.minute)){
+    const size=Math.min(width,context.measureText(String(e.label)).width+8),center=(e.minute-range[0])*width/span;
+    const left=Math.max(0,Math.min(width-size,center-size/2));
+    let lane=lanes.findIndex(end=>left>=end+6);if(lane<0){lane=lanes.length;lanes.push(0);}lanes[lane]=left+size;
+  }
+  return Math.max(24,lanes.length*16+8);
+}
 function applyAutomationNotes(view,index){
+  const previous=view.data.filter(t=>t.meta?.kind==='automation_note'),compact=view.layout.meta?.kind==='compact';
+  const reserved=view.layout.meta?.automation_axis;
+  if(previous.length || reserved!==undefined&&view.layout['yaxis'+reserved]){
+    const axes=new Set(previous.map(t=>'yaxis'+t.yaxis.slice(1)));
+    if(reserved!==undefined)axes.add('yaxis'+reserved);
+    for(const axis of axes)delete view.layout[axis];
+    const scale=view.layout.meta?.automation_scale;
+    if(!compact && scale){
+      for(const [key,axis] of Object.entries(view.layout))if(/^yaxis\d*$/.test(key)&&!axis.overlaying)axis.domain=axis.domain.map(v=>v/scale);
+      for(const shape of view.layout.shapes || [])if(shape.yref==='paper'){shape.y0/=scale;shape.y1/=scale;}
+      for(const a of view.layout.annotations || [])if(a.yref==='paper'&&a.y>=0&&a.y<=scale)a.y/=scale;
+    }
+  }
+  delete view.layout.meta.automation_axis;delete view.layout.meta.automation_scale;
+  delete view.layout.meta.automation_print_key;
+  view.layout.annotations=(view.layout.annotations || []).filter(a=>!a.name?.startsWith('Automation label | '));
+  if(compact){delete view.layout.meta.compact_automation;delete view.layout.meta.compact_automation_top;}
   view.data=(view.data || []).filter(t=>t.meta?.kind!=='automation_note');
   if(!eventAllowed(view,'automation'))return;
   const events=(navigation?.automation_notes || []).filter(e=>selectedDays.includes(e.date));
-  if(!events.length)return;
+  if(!events.length && !(navigation?.report_render?.reserve_automation))return;
   const aux=1+Math.max(1,...Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k)).map(k=>Number(k.slice(5)) || 1));
   // Plotly hides out-of-range marker points even with cliponaxis:false.
   // Reserve a small real axis strip above the data instead of drawing outside it.
-  for(const key of Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k))){const axis=view.layout[key];if(!axis.overlaying)axis.domain=(axis.domain || [0,1]).map(v=>v*.90);}
-  for(const shape of view.layout.shapes || [])if(shape.yref==='paper'){shape.y0*=.90;shape.y1*=.90;}
-  for(const annotation of view.layout.annotations || [])if(annotation.yref==='paper' && annotation.y>=0 && annotation.y<=1)annotation.y*=.90;
-  view.layout['yaxis'+aux]={anchor:'x',domain:[.93,1],range:[0,1],autorange:false,visible:false,fixedrange:true,showgrid:false};
+  const printable=Boolean(navigation?.report_render),height=Math.max(40,(view.layout.height || 350)-(view.layout.margin?.t || 36)-(view.layout.margin?.b || 62));
+  const top=printable?1-Math.min(.45,(navigation.report_render.consolidate_automation?12:events.length?automationReportRail(view,events):24)/height):.90;
+  if(compact){view.layout.meta.compact_automation=true;view.layout.meta.compact_automation_top=top;}
+  else for(const key of Object.keys(view.layout).filter(k=>/^yaxis\d*$/.test(k))){const axis=view.layout[key];if(!axis.overlaying)axis.domain=(axis.domain || [0,1]).map(v=>v*top);}
+  view.layout.meta={...view.layout.meta,automation_scale:top,automation_axis:aux};
+  for(const shape of view.layout.shapes || [])if(!compact && shape.yref==='paper'){shape.y0*=top;shape.y1*=top;}
+  for(const annotation of view.layout.annotations || [])if(!compact && annotation.yref==='paper' && annotation.y>=0 && annotation.y<=1)annotation.y*=top;
+  view.layout['yaxis'+aux]={anchor:'x',domain:[printable?top+.01:.93,1],range:[0,1],autorange:false,visible:false,fixedrange:true,showgrid:false};
   const safe=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-  for(const [i,e] of events.entries())view.data.push({type:'scatter',x:[e.minute],y:[.25+(i%2)*.5],yaxis:'y'+aux,mode:'markers',cliponaxis:false,
+  for(const [i,e] of events.entries())view.data.push({type:'scatter',x:[e.minute],y:[printable ? .88 : .25+(i%2)*.5],yaxis:'y'+aux,mode:'markers',cliponaxis:false,
     marker:{symbol:'diamond',size:7,color:'#44a6a1',line:{width:.7,color:view.layout.plot_bgcolor}},name:'Automation notes',legendgroup:'automation-notes',showlegend:i===0,
     meta:{kind:'automation_note',label:e.label,date:e.date,legend_entry:i===0},hovertemplate:safe(e.label)+'<extra></extra>'});
-  view.layout.margin={...view.layout.margin,t:Math.max(view.layout.margin?.t || 0,44)};view.layout.showlegend=true;
+  if(printable && events.length && !navigation.report_render.consolidate_automation)automationReportLabels(view,events,aux,height,top);
+  view.layout.margin={...view.layout.margin,t:Math.max(view.layout.margin?.t || 0,printable?20:44)};
+  if(events.length)view.layout.showlegend=true;
 }

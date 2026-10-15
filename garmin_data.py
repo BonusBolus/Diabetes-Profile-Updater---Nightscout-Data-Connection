@@ -84,7 +84,7 @@ def metric_unit(key, loaded):
     return extra[key][system=='Statute'] if key in extra and system in ('Metric','Statute') else METRICS[key][1]
 
 
-def load_garmin(folder, first, last, source_zone, display_zone, measurement_units='Metric', categories=None):
+def load_garmin(folder, first, last, source_zone, display_zone, measurement_units='Metric', categories=None, progress=None):
     ZoneInfo(source_zone);ZoneInfo(display_zone)
     if last<first or (last-first).days>365:raise ValueError('Load between 1 and 366 days at a time.')
     selected=set(categories) if categories is not None else {'steps','heart_rate','activity','stress','sleep','respiration'}
@@ -104,7 +104,8 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
     begin=first-timedelta(days=1);stop=last+timedelta(days=2)
     start_utc=pd.Timestamp(first).tz_localize(display_zone).tz_convert('UTC')
     end_utc=pd.Timestamp(last+timedelta(days=1)).tz_localize(display_zone).tz_convert('UTC')
-    for db,path in paths.items():
+    for done,(db,path) in enumerate(paths.items()):
+        if progress:progress(done,len(paths)+2,'Reading '+path.name)
         with closing(sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True,timeout=5)) as conn:
             conn.execute('PRAGMA query_only=ON');conn.execute('BEGIN')
             tables={r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -221,8 +222,10 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
         for row in data['g_sleep'].itertuples():inside |= rr.time.ge(row.time)&rr.time.lt(row.end)
         if inside.any():data['g_sleep_rr']=rr[inside].copy()
     from garmin_exports import supplement_exports
+    if progress:progress(len(paths),len(paths)+2,'Reading sleep exports and activity FIT files')
     sleep_notes=supplement_exports(health_root,data,activities,daily,inventory,warnings,start_utc,end_utc,display_zone,
-                                   include_sleep=bool(selected.intersection({'sleep','respiration'})),include_activity='activity' in selected)
+                                   include_sleep=bool(selected.intersection({'sleep','respiration'})),include_activity='activity' in selected,progress=(lambda label:progress(len(paths),len(paths)+2,label)) if progress else None)
+    if progress:progress(len(paths)+1,len(paths)+2,'Aligning Garmin health signals')
     activity_count=len(data.get('g_activity',[]))
     inventory.append(dict(field='Recorded activity intervals',records=activity_count,source='GarminDB / FIT sessions'))
     if not activity_count and any(k.startswith('g_workout_') for k in data):
@@ -236,6 +239,7 @@ def load_garmin(folder, first, last, source_zone, display_zone, measurement_unit
         data={k:v for k,v in data.items() if k!='g_sleep' and not k.startswith('g_sleep_') and k not in ('g_hrv','g_spo2')}
     if 'respiration' not in selected:data.pop('g_waking_rr',None)
     if not data and not daily: warnings.append('No supported populated health fields found for these dates.')
+    if progress:progress(len(paths)+2,len(paths)+2,'Garmin data ready')
     return dict(sleep_notes=sleep_notes,sleep_sessions=sleep_sessions,data=data,daily=daily,activities=activities,inventory=inventory,warnings=list(dict.fromkeys(warnings)),
                 first=first,last=last,zone=display_zone,source_zone=source_zone,measurement_units=measurement_units,loaded_categories=sorted(selected),loaded_at=datetime.now(timezone.utc))
 

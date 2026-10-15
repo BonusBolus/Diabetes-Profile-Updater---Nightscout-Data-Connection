@@ -18,6 +18,7 @@ from editor_history import record_edit, reset_history, restore_edit
 from nightscout_charts import graph_figures, schedule_changes, add_profile_guides
 from graph_view import render_graphs, prepared_graphs
 from nightscout_ui import sidebar_controls, graph_date_controls
+from view_config import configuration_controls
 
 from profiles import (METRICS, adjust_range, clock, daily_basal, differences,
                       excel_sheets, export_excel, import_excel, load_profiles, minute,
@@ -176,16 +177,31 @@ for state_key in ('reference_category','reference_id','compare_second','second_r
 
 with st.sidebar:
     st.title("Profile Studio")
-    st.caption("Build: Health-37")
+    st.caption("Build: Health-51")
     st.toggle("Dark mode", value=dark, key="dark_mode")
     if st.session_state.pop("open_editor", False):
         st.session_state.page = "Editor"
+        st.session_state.workspace_type = "Profile"
         st.session_state.show_history = False
-    page = st.radio("Workspace", ["View", "Compare", "Editor", "Data"], index=2,horizontal=True,key="page")
+    if 'workspace_type' not in st.session_state:
+        st.session_state.workspace_type='Data' if st.session_state.get('page')=='Data' else 'Profile'
+    workspace=st.segmented_control('Workspace',['Profile','Data'],key='workspace_type') or 'Profile'
+    if workspace=='Profile':
+        if st.session_state.get('page') not in ('View','Compare','Editor'):st.session_state.page='Editor'
+        page=st.radio('Profile',['View','Compare','Editor'],horizontal=True,key='page',format_func=lambda v:'Edit' if v=='Editor' else v)
+    else:
+        st.segmented_control('Data workspace',['View Data','Export'],default='View Data',key='data_workspace')
+        page='Data'
+
     show_history = st.checkbox("Browse history / export", key="show_history") if page != "Data" else False
     if show_history:
         page = "History"
     st.divider()
+    if st.button('+ Add graph',key='workspace_add_graph',width='stretch'):
+        st.session_state.health_picker_revision=st.session_state.get('health_picker_revision',0)+1
+    configuration_controls()
+    st.divider()
+    recorded_slot=st.container()
     reference = None
     second_reference = None
     if page != "Data":
@@ -261,18 +277,18 @@ with st.sidebar:
                         st.error(str(exc))
     st.divider()
     profile_zone=(reference if page in ("View", "Compare") and reference else st.session_state.get("draft", {})).get("overview", {}).get("timezone", "Europe/Amsterdam")
-    if page == "Data":
-        profile_zone=st.text_input("Display timezone",value=profile_zone,key="health_timezone")
-        data_unit=st.selectbox("Glucose units",["mmol/L","mg/dL"],key="health_glucose_unit")
-    nightscout_view = sidebar_controls(profile_zone)
+    nightscout_view = sidebar_controls(profile_zone,display_slot=recorded_slot,data_workspace=page=='Data')
+    if page == 'Data':
+        profile_zone=st.session_state.get('health_timezone',profile_zone)
+        data_unit=st.session_state.get('health_glucose_unit','mmol/L')
 
 
 if page == "Data":
     if "draft" in st.session_state:
         st.session_state.seeds = deepcopy(st.session_state.raw_schedules)
         st.session_state.extra_seed = deepcopy(st.session_state.raw_extra)
-    st.title("Health data")
-    st.caption("Nightscout and Garmin timelines · select sources, dates and layers in the sidebar")
+    st.title("Report workspace" if st.session_state.get("data_workspace")=="Export" else "Health data")
+    st.caption("Use + Add graph to combine daily, summary and insight graphs. Data loading stays in the sidebar.")
     if nightscout_view and nightscout_view['days']:
         if nightscout_view['loaded']['zone'] != profile_zone:
             st.info("Reload data to use the selected display timezone.")

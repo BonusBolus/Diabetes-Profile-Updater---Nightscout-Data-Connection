@@ -22,7 +22,7 @@ DIABETES_LAYERS = {"Glucose":"glucose", "COB + Carbs":"cob_carbs", "IOB + Boluse
 GARMIN_MAIN_LAYERS = {"Garmin · Steps":"g_steps", "Garmin · Heart Rate":"g_hr", "Garmin · Activity":"g_workout",
                       "Garmin · Stress":"g_stress", "Garmin · Sleep":"g_sleep", "Garmin · Respiration":"g_waking_rr"}
 DIABETES_LAYERS.update(EVENT_LAYERS)
-LAYERS = {**DIABETES_LAYERS, **GARMIN_MAIN_LAYERS, **INSIGHT_LAYERS, "Custom graph":"custom"}
+LAYERS = {**DIABETES_LAYERS, **GARMIN_MAIN_LAYERS, **INSIGHT_LAYERS, "Glucose Compact":"compact", "Custom graph":"custom"}
 LAYER_ALIASES = {"Garmin · Cumulative steps":"Garmin · Steps", "COB + carbs":"COB + Carbs", "IOB + boluses":"IOB + Boluses", "Temporary basal":"Temporary Basal",
                  "Post-site-change glucose":"Site-age glucose",
                  "Nightscout targets":"Temporary Targets", "Variable sensitivity":"Variable Sensitivity",
@@ -223,7 +223,7 @@ def dataset_traces(key, loaded, days, mode, unit, dark):
 
 def display_traces(key, loaded, days, mode, unit, dark):
     traces=_dataset_traces(key,loaded,days,mode,unit,dark)
-    if key=='iob':return split_iob(traces,dark)
+    if key=='iob' and mode!='Median + band':return split_iob(traces,dark)
     return traces
 
 
@@ -257,7 +257,7 @@ def _dataset_traces(key, loaded, days, mode, unit, dark):
             go.Scatter(x=stats.minute.tolist(), y=stats['median'].tolist(), mode='lines', name='Median '+label.lower() if key=='glucose' else 'Median '+label,
                        line=dict(color=color,width=2.5,shape='hv' if key in ('basal','basal_percent','cob') else 'linear',dash='solid'),
                        fill='tozeroy' if key in ('iob','cob','basal','basal_percent') else None,fillcolor=rgba(color,.12),
-                       customdata=stats['days'].tolist(), meta=dict(label='Median '+label,unit=sample_unit,kind='median',dataset=key), connectgaps=False,
+                       customdata=stats['days'].tolist(), meta=dict(label='Median '+label,unit=sample_unit,kind='median',dataset=key,summary=dict(p10=stats['p10'].tolist(),p90=stats['p90'].tolist(),average=stats['average'].tolist(),median=stats['median'].tolist(),count=stats['days'].tolist())), connectgaps=False,
                        hovertemplate='%{y:.3g} '+sample_unit+'<br>%{customdata:.0f} contributing days<extra>Median</extra>')]
     traces = []
     sample_unit = {'glucose':unit,'basal':'U/h','basal_percent':'% field','bolus':'U','iob':'U','carbs':'g','cob':'g','target':unit,**{k:telemetry_unit(k,unit) for k in TELEMETRY_LABELS}}[key]
@@ -366,7 +366,7 @@ def glucose_axis(fig, loaded, days, unit, secondary=False, fixed_band=True):
                                  yaxis='y2' if secondary else 'y'))
 
 
-def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False, data_only=False):
+def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overlay='None', show_targets=True, same_scale=False, summary_layout=False, profile_only=False, data_only=False, only_datasets=None):
     """Return a pinned profile figure followed by independent, time-aligned panels."""
     layers=normalize_layers(layers)
     overlay={'Nightscout targets':'Temporary Targets','Temporary basal':'Temporary Basal','COB + carbs':'COB + Carbs','IOB + boluses':'IOB + Boluses','Variable sensitivity':'Variable Sensitivity'}.get(overlay,overlay)
@@ -423,6 +423,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         compact_legend(top)
         return [top]
     selected={key for label in layers for key in GROUP_KEYS.get(LAYERS[label], [LAYERS[label]])}
+    if only_datasets is not None:selected.intersection_update(only_datasets)
     groups=[(['glucose'],'Glucose',unit),(['basal'],'Temp basal','U/h'),
             (['iob','bolus'],'IOB & boluses','U'),(['cob','carbs'],'COB & carbs','g'),
             (['target'],'Temp targets',unit)]
@@ -478,6 +479,7 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
             fig.update_layout(height=310,meta=dict(fig.layout.meta or {},sleep_fields=extras))
             for extra in extras:
                 for trace in dataset_traces(extra,loaded,days,mode,unit,dark):
+                    trace=type(trace)(trace)  # Keep cached standalone/custom signals visible.
                     trace.meta=dict(trace.meta or {},sleep_overlay=True)
                     trace.visible=False
                     fig.add_trace(trace)
@@ -488,9 +490,12 @@ def graph_figures(profile_figure, loaded, days, mode, layers, unit, dark, overla
         figures.append(fig)
     for key in EVENT_LABELS:
         if key in selected and len(set(days))>1:figures.append(hourly_figure(loaded,key,days,dark))
-    if any(key.startswith('insight_') for key in selected) and len(set(days))>1:
+    if any(key.startswith('insight_') for key in selected):
         from insights import insight_figures
         figures.extend(insight_figures(loaded,days,unit,dark,selected))
+    if 'compact' in selected:
+        from compact_glucose import compact_figure
+        figures.append(compact_figure(loaded,days,unit,dark))
     if 'custom' in selected:
         fig=go.Figure()
         style_figure(fig,f'Custom graph · {dates}','',loaded['zone'],dark,height=390)

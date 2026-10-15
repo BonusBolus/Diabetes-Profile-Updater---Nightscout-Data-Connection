@@ -5,9 +5,9 @@ function ensurePanelState(spec,raw={}){
   const base=raw.base || sourceIdentity(spec),custom=spec.layout.meta?.custom_id;
   const id=raw.id || spec.layout.meta?.panel_id || (custom?'custom:'+custom:base);
   spec.layout.meta={...spec.layout.meta,panel_id:id};
-  if(!panelStates.has(id))panelStates.set(id,{id,base,title:raw.title || (custom?'Custom '+custom.replace('custom-',''):spec.layout.title.text.split(' · ')[0]),deleted:raw.deleted===true,mode:raw.mode || 'Median + band',
-    garmin:JSON.parse(JSON.stringify(raw.garmin || garminOptions)),hourly:raw.hourly || hourlyModes[spec.layout.meta?.dataset] || 'Average',showDailyGrid:raw.showDailyGrid===true,showTargets:raw.showTargets!==false,excludeSMB:raw.excludeSMB===true || (!('excludeSMB' in raw) && excludeSMB),
-    axisRanges:JSON.parse(JSON.stringify(raw.axisRanges || {})),insight:{duration:spec.layout.meta?.insight==='sleep'?24:6,normalization:'absolute',metric:spec.layout.meta?.insight==='sensor_variability'?'rate':'glucose',aggregation:'Median',fitY:false,showIOB:false,showCOB:false,minCarbs:0,filterStartCOB:false,maxStartCOB:0,siteWindow:'full',sleepView:'overnight',relationX:'asleep_hours',relationY:'mean',...raw.insight},duplicate:raw.duplicate===true,profileCopy:raw.profileCopy===true,overlay:raw.overlay || currentOverlay,metric:raw.metric || currentMetric,sameScale:raw.sameScale===true});
+  if(!panelStates.has(id))panelStates.set(id,{id,base,title:raw.title || (custom?'Custom '+custom.replace('custom-',''):spec.layout.title.text.split(' · ')[0]),deleted:raw.deleted===true || (workspaceGraphs && !raw.id && base!=='profile:settings'),graphType:raw.graphType || (base==='profile:settings'?'daily':spec.layout.meta?.kind==='insight'?'insight':spec.layout.meta?.kind==='hourly'?'summary':'daily'),events:{...raw.events},bands:raw.bands || '25–75%',statistic:raw.statistic || 'Median',summaryView:raw.summaryView || 'Timeline + hourly bars',mode:raw.mode || 'Median + band',
+    garmin:restoredGarminOptions(raw.garmin),hourly:raw.hourly || hourlyModes[spec.layout.meta?.dataset] || 'Average',showDailyGrid:raw.showDailyGrid===true,showTargets:raw.showTargets!==false,showAmounts:raw.showAmounts!==false,fitActivities:raw.fitActivities===true,excludeSMB:raw.excludeSMB===true || (!('excludeSMB' in raw) && excludeSMB),
+    axisRanges:JSON.parse(JSON.stringify(raw.axisRanges || {})),insight:{duration:spec.layout.meta?.insight==='sleep'?24:6,normalization:'absolute',metric:spec.layout.meta?.insight==='sensor_variability'?'rate':'glucose',aggregation:'Median',fitY:false,showIOB:false,showCOB:false,minCarbs:0,filterStartCOB:false,maxStartCOB:0,siteWindow:'full',sleepView:'overnight',overviewAfterHours:4,overviewPage:0,sleepFields:[],sleepOverlay:false,relationX:'asleep_hours',relationY:'mean',...raw.insight},duplicate:raw.duplicate===true,profileCopy:raw.profileCopy===true,overlay:raw.overlay || currentOverlay,metric:raw.metric || currentMetric,sameScale:raw.sameScale===true});
   return panelStates.get(id);
 }
 function panelStateAt(index){return ensurePanelState(specs[index]);}
@@ -22,20 +22,20 @@ function panelHasMedian(spec){
   }
   return true;
 }
-function effectivePanelMode(index){return selectedDays.length<2 || dateCycled?'One day':!panelHasMedian(specs[index])?'Multiple days':panelStateAt(index).mode;}
-function panelModeControls(parent,panel,spec){
+function effectivePanelMode(index){if(workspaceGraphs){const s=panelStateAt(index);return s.graphType==='daily'?'One day':s.graphType==='insight'?'Median + band':s.mode || (s.graphType==='overlay'?'Multiple days':'Median + band');}return selectedDays.length<2 || dateCycled?'One day':!panelHasMedian(specs[index])?'Multiple days':panelStateAt(index).mode;}
+function panelModeControls(parent,panel,spec,actions=parent){
   const state=ensurePanelState(spec),id=state.id;
   const mode=document.createElement('select');mode.setAttribute('aria-label','Graph display mode');
   for(const [value,label] of [['Multiple days','Multiple days'],['Median + band','Summary']]){const o=document.createElement('option');o.value=value;o.textContent=label;mode.appendChild(o);}
   mode.title='Multiple days shows individual dated curves; Summary combines them. The statistic control and legend specify Average or Median.';
   mode.addEventListener('change',()=>changePanelState(panel.graphIndex,s=>{s.mode=mode.value;}));parent.appendChild(mode);
-  const duplicate=document.createElement('button');duplicate.textContent='Duplicate';duplicate.type='button';duplicate.addEventListener('click',()=>duplicateGraph(panel.graphIndex));parent.appendChild(duplicate);
-  const remove=document.createElement('button');remove.textContent='Delete graph';remove.setAttribute('aria-label','Delete graph');remove.type='button';remove.addEventListener('click',()=>deleteGraph(panel.graphIndex));parent.appendChild(remove);
+  const duplicate=document.createElement('button');duplicate.textContent='Duplicate';duplicate.type='button';duplicate.addEventListener('click',()=>duplicateGraph(panel.graphIndex));actions.appendChild(duplicate);
+  const remove=document.createElement('button');remove.textContent='Delete graph';remove.setAttribute('aria-label','Delete graph');remove.type='button';remove.addEventListener('click',()=>deleteGraph(panel.graphIndex));actions.appendChild(remove);
   panelUIs.push({panel,id,mode,duplicate,remove});
 }
 function panelControls(){
-  for(const ui of panelUIs){if(!ui.panel.isConnected)continue;const state=panelStates.get(ui.id);if(!state)continue;
-    if(ui.hourlyGridControl){ui.el.disabled=!ready || syncing;ui.el.setAttribute('aria-pressed',String(state.showDailyGrid));ui.el.textContent='Daily grid: '+(state.showDailyGrid?'on':'off');continue;}
+  for(const ui of panelUIs){if(!ui.panel.isConnected)continue;const state=panelStateAt(ui.panel.graphIndex);if(!state)continue;
+    if(ui.hourlyGridControl){ui.el.hidden=Boolean(summaryEventKey(specs[ui.panel.graphIndex]) && (state.graphType==='daily' || state.summaryView==='Timeline'));ui.el.disabled=!ready || syncing;ui.el.setAttribute('aria-pressed',String(state.showDailyGrid));ui.el.textContent='Daily grid: '+(state.showDailyGrid?'on':'off');continue;}
     if(ui.profileControl){ui.el.value=state[ui.field];ui.el.disabled=!ready || syncing;if(ui.field==='sameScale'){ui.el.setAttribute('aria-pressed',String(state.sameScale));ui.el.textContent='Same axis scale: '+(state.sameScale?'on':'off');}continue;}
     if(ui.insightOnly){ui.el.value=state.insight[ui.field];ui.el.disabled=!ready || syncing;
       (ui.wrap || ui.el).hidden=ui.visible?!ui.visible(state.insight):false;
@@ -44,7 +44,7 @@ function panelControls(){
       if(ui.toggle){ui.el.setAttribute('aria-pressed',String(state.insight[ui.field]===true));ui.el.textContent=ui.toggle(state.insight);}
       continue;}
     const spec=specs[ui.panel.graphIndex],fixed=!panelHasMedian(spec);
-    ui.mode.hidden=selectedDays.length<2 || fixed || (spec.layout.meta?.insight==='sleep' && state.insight.sleepView==='relationship');ui.mode.value=state.mode;ui.mode.disabled=!ready || syncing;
+    ui.mode.hidden=workspaceGraphs || selectedDays.length<2 || fixed || (spec.layout.meta?.insight==='sleep' && ['relationship','overview'].includes(state.insight.sleepView));ui.mode.value=state.mode;ui.mode.disabled=!ready || syncing;
     if(ui.top){if(ui.duplicate)ui.duplicate.disabled=!ready || syncing;if(ui.remove)ui.remove.disabled=!ready || syncing;continue;}
     ui.duplicate.disabled=!ready || syncing;ui.remove.disabled=!ready || syncing;
   }
@@ -63,7 +63,7 @@ function applyHourlyGrid(view,index){
     // Its former space belongs to the bars when it is not displayed.
     view.layout.yaxis.visible=false;view.layout.xaxis.visible=false;
     view.layout.yaxis2.domain=[0,1];view.layout.xaxis2.showticklabels=true;
-    view.layout.height=280;view.layout.margin.l=64;view.layout.margin.r=28;
+    view.layout.height=190;view.layout.margin.l=64;view.layout.margin.r=28;
   }
 }
 async function changePanelState(index,mutate){
@@ -87,7 +87,7 @@ function appendGraphCopy(baseIndex,raw=null){
 async function duplicateGraph(index){
   if(!ready || syncing)return;
   return enqueue(async()=>{syncing=true;clearHover();controls();let copy;
-    try{copy=appendGraphCopy(index);const v=decorate(localSource(copy),copy);v.layout=sizedLayout(v,copy);
+    try{copy=appendGraphCopy(index);const v=decorate(panelSourceView(localSource(copy),copy,graphs[index].layout.xaxis.range),copy);v.layout=sizedLayout(v,copy);
       if(!v.layout.meta?.non_time)v.layout.xaxis.range=graphs[index].layout.xaxis.range.slice();
       await Plotly.newPlot(graphs[copy],v.data,v.layout,{responsive:false,displaylogo:false,toImageButtonOptions:{format:'png',scale:2}});await reflowProfileLabels(graphs[copy]);bindGraph(graphs[copy],copy);
       // Put the comparison beside the original in the scrolling order.
@@ -112,7 +112,7 @@ function hiddenGraphCatalog(){
 }
 let sentHiddenGraphs=null;
 function notifyHiddenGraphs(){
-  if(!ready || syncing || navigation?.report_render)return;
+  if(!ready || syncing || navigation?.report_render || workspaceGraphs)return;
   const hidden=hiddenGraphCatalog(),encoded=JSON.stringify(hidden);
   if(encoded===(sentHiddenGraphs ?? JSON.stringify(navigation?.hidden_graphs || [])))return;
   sentHiddenGraphs=encoded;
@@ -134,9 +134,16 @@ function restoreGraphPanels(saved){
   saved=saved.filter(s=>s.duplicate || s.base!==legacy || !hasSiteAge).map(s=>s.base!==legacy?s:
     {...s,base:merged,id:s.id===legacy?merged:s.id,insight:{...s.insight,siteWindow:'limited'}});
   // Restore existing graphs first. A copy never stores duplicated raw observations.
+  const claimed=new Set();
   for(const raw of saved.filter(s=>!s.duplicate)){
     let index=specs.findIndex(s=>s.layout.meta?.panel_id===raw.id);if(index<0)index=specs.findIndex(s=>sourceIdentity(s)===raw.base);
-    if(index<0){dormantPanelStates.push(raw);continue;}panelStates.delete(specs[index].layout.meta.panel_id);ensurePanelState(specs[index],raw);
+    if(index>=0 && claimed.has(index) && raw.custom && specs[index].layout.meta?.kind==='custom')index=appendCustomPanel(raw.custom);
+    if(index<0){dormantPanelStates.push(raw);continue;}
+    claimed.add(index);
+    if(raw.custom && specs[index].layout.meta?.kind==='custom'){
+      const id=specs[index].layout.meta.custom_id;customStates.delete(id);newCustomState({...raw.custom,id});const ui=customUIs.get(id);if(ui)ui.signature=null;
+    }
+    panelStates.delete(specs[index].layout.meta.panel_id);ensurePanelState(specs[index],raw);
   }
   for(const raw of saved.filter(s=>s.duplicate)){
     if(panelStates.has(raw.id))continue;const index=raw.profileCopy?0:specs.findIndex(s=>sourceIdentity(s)===raw.base);

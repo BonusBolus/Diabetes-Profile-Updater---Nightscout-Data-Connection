@@ -1,6 +1,7 @@
 """Garmin timelines with dated traces for the offline/expanded viewer."""
 from html import escape
 from collections import Counter
+from chart_cache import cached
 import math
 import numpy as np
 import pandas as pd
@@ -87,6 +88,7 @@ def hourly_sleep_distribution(frame,days,zone):
     asleep=per.drop(columns=['awake'],errors='ignore').sum(axis=1)
     asleep=asleep.reindex(pd.MultiIndex.from_product([sorted(recorded),range(24)],names=['day','hour']),fill_value=0)
     result.attrs['median']=asleep.groupby('hour').median().tolist()
+    result.attrs['distribution']={name:(asleep.groupby('hour').quantile(q)/60).tolist() if len(recorded)>=2 else [None]*24 for name,q in [('p10',.1),('p90',.9),('p25',.25),('p75',.75)]}
     # A stack of independent stage medians can exceed an hour, or become all
     # zero despite everyone sleeping. Split the median total by the observed
     # asleep-stage mix instead, and identify that composition in the hover.
@@ -105,7 +107,7 @@ def garmin_traces(key,loaded,days,mode):
     if frame.empty:return []
     label,unit,color,*_=METRICS[key];unit=metric_unit(key,loaded);zone=loaded['zone'];traces=[]
     if key=='g_sleep' and mode=='Median + band':
-        stats,counts=sleep_probabilities(frame,days,zone)
+        stats,counts=cached(loaded,'sleep_summary',('stages',tuple(days),zone),lambda:sleep_probabilities(frame,days,zone))
         if stats.empty:return []
         base=pd.Series(0.,index=stats.index)
         for stage in ('deep_sleep','light_sleep','rem_sleep','awake'):
@@ -116,7 +118,7 @@ def garmin_traces(key,loaded,days,mode):
                 meta=dict(kind='median',dataset=key,label=name+' · observed dates',unit='%',sleep_variant='stages',legend_entry=True),
                 hovertemplate='%{y:.1f}% · %{customdata} recorded dates<extra>'+name+'</extra>'))
             base=base+stats[stage].fillna(0)
-        hourly,denominator=hourly_sleep_distribution(frame,days,zone)
+        hourly,denominator=cached(loaded,'sleep_summary',('hourly',tuple(days),zone),lambda:hourly_sleep_distribution(frame,days,zone))
         # One real hourly stack, with explicit common positions and bases.
         # Do not repeat each hour's statistic as twelve adjacent five-minute bars.
         minutes=list(range(0,1440,60));base=[0.]*len(minutes)
@@ -138,6 +140,9 @@ def garmin_traces(key,loaded,days,mode):
                 meta=dict(kind='sleep_distribution',dataset=key,label=name+' · median hourly sleep',unit='h/hour',sleep_variant='hourly',aggregation='Median',legend_entry=True),
                 hovertemplate='%{y:.3g} h per clock hour · %{customdata} recorded dates<br>'+detail+'<extra>'+name+'</extra>'))
             base=[a+b for a,b in zip(base,values)]
+        for aggregation in ('Average','Median'):
+            first=next((t for t in traces if t.meta.get('aggregation')==aggregation),None)
+            if first is not None:first.meta=dict(first.meta,distribution=hourly.attrs['distribution'])
         return traces
     if key in ('g_sleep','g_activity'):
         # Activities are categorical intervals, never averaged as numeric amounts.
@@ -180,7 +185,7 @@ def garmin_traces(key,loaded,days,mode):
                 hourly=per.groupby('slot').agg(['mean','median','count']).reindex(range(0,1440,60))
                 return [go.Bar(x=[x+30 for x in hourly.index],y=hourly[column].tolist(),width=50,
                     name=name+' hourly steps',marker_color=color,customdata=hourly['count'].fillna(0).tolist(),
-                    visible=name=='Average',meta=dict(kind='garmin_aggregate',dataset=key,unit=unit,aggregation=name,label=name+' hourly steps'),
+                    visible=name=='Average',meta=dict(kind='garmin_aggregate',dataset=key,unit=unit,aggregation=name,label=name+' hourly steps',distribution={name:per.groupby('slot').quantile(q).reindex(hourly.index).where(hourly['count'].ge(2)).tolist() for name,q in [('p10',.1),('p90',.9),('p25',.25),('p75',.75)]}),
                     hovertemplate='%{y:g} steps · %{customdata} days<extra></extra>') for name,column in [('Average','mean'),('Median','median')]]
             return [go.Bar(x=[x[1]+30 for x in group.index],y=group.tolist(),width=50,name=label,
                     marker_color=color,opacity=.65,meta=dict(kind='garmin',dataset=key,label='Observed hourly steps',unit=unit,date=str(day)))
@@ -204,7 +209,7 @@ def garmin_traces(key,loaded,days,mode):
                 band.meta=dict(band.meta,legend_entry=i==0);band.fillcolor=_rgba(color,.28)
             line=go.Scatter(x=totals.index.tolist(),y=totals.tolist(),mode='lines',name='Median',
                 line=dict(color=color,width=2.5,shape='hv'),connectgaps=False,customdata=counts.tolist(),
-                meta=dict(kind='median',dataset=key,unit=unit,label='Median cumulative steps',variant='cumulative'),
+                meta=dict(kind='median',dataset=key,unit=unit,label='Median cumulative steps',variant='cumulative',summary=dict(p10=daily.quantile(.10).where(counts.ge(2)).tolist(),p90=daily.quantile(.90).where(counts.ge(2)).tolist(),count=counts.tolist())),
                 hovertemplate='%{y:g} steps · %{customdata} days<extra>Median</extra>')
             return bands+[line]
         # A separate observed-increment line; never assume missing increments are zero.
@@ -226,10 +231,10 @@ def garmin_traces(key,loaded,days,mode):
         group=per.groupby('slot');stats=group.agg(['median','count']).reindex(range(0,1440,5))
         low=group.quantile(.25).reindex(stats.index);high=group.quantile(.75).reindex(stats.index)
         bands=quartile_bands(low,high,color,label,dict(kind='garmin_band',dataset=key,unit=unit))
-        meta=dict(kind='median',dataset=key,label='Median '+label,unit=unit)
+        meta=dict(kind='median',dataset=key,label='Median '+label,unit=unit,summary=dict(p10=group.quantile(.10).reindex(stats.index).tolist(),p90=group.quantile(.90).reindex(stats.index).tolist(),count=stats['count'].tolist()))
         if key in ('g_stress','g_sleep_restless'):
             meta.update(average=group.mean().reindex(stats.index).tolist(),median=stats['median'].tolist())
-        line=go.Scatter(x=stats.index.tolist(),y=stats['median'].tolist(),mode='lines',name='Median '+label,
+        line=go.Scatter(x=stats.index.tolist(),y=stats['median'].tolist(),mode='lines+markers' if key.startswith('g_sleep_') else 'lines',marker=dict(size=3),name='Median '+label,
             line=dict(color=color,width=2),customdata=stats['count'].fillna(0).tolist(),connectgaps=False,
             meta=meta,hovertemplate='%{y:.3g} '+unit+' · %{customdata} days<extra></extra>')
         return bands+[line]

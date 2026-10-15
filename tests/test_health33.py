@@ -42,7 +42,7 @@ class Health33Tests(unittest.TestCase):
     def test_full_and_limited_transforms_keep_replacement_boundaries(self):
         loaded,days=site_fixture()
         meta=insight_figures(loaded,days,'mmol/L',False,{'insight_site_age'})[0].layout.meta
-        code="""const assert=require('assert'),navigation={unit:'mmol/L'};
+        code="""const workspaceGraphs=false;const assert=require('assert'),navigation={unit:'mmol/L'};
 let state={base:'site',mode:'Multiple days',insight:{siteWindow:'full',duration:72,aggregation:'Median',normalization:'absolute'}};
 function panelStateAt(){return state;}function applyPanelRanges(){}
 const meta="""+json.dumps(meta)+";\n"+(Path(__file__).parents[1]/'insights_view.js').read_text()+"""
@@ -62,7 +62,7 @@ state.insight.siteWindow='full';v=render();assert(!v.layout.title.text.includes(
 
     def test_saved_post_change_settings_merge_without_duplicate_base(self):
         source=(Path(__file__).parents[1]/'panel_view.js').read_text()
-        code="""const assert=require('assert'),garminOptions={},hourlyModes={},excludeSMB=false,currentOverlay='None',currentMetric='ic';
+        code="""const workspaceGraphs=false;const assert=require('assert'),garminOptions={},hourlyModes={},excludeSMB=false,currentOverlay='None',currentMetric='ic';
 const merged='insight:insight_site_age',legacy='insight:insight_site_after';
 const specs=[{layout:{meta:{kind:'insight',dataset:'insight_site_age',insight:'site_age'},title:{text:'Site-age glucose'}}}],navigation={figures:[]};
 function createPanel(){}

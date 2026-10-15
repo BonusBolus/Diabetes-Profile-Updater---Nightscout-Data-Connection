@@ -53,7 +53,7 @@ class Health29Tests(unittest.TestCase):
 
     def test_profile_labels_reflow_at_narrow_width(self):
         code=(Path(__file__).parents[1]/'garmin_view.js').read_text();code=code[code.index('function profileEventLayout'):]
-        context="""const assert=require('assert');const annotations=[];
+        context="""const assert=require('assert');const workspaceGraphs=false;const annotations=[];
 for(let i=0;i<3;i++){annotations.push({name:'Effective | '+i,x:600+i*20,y:-.001,text:'LenStandardV18',font:{size:10}});annotations.push({name:'Effective | '+i,x:600+i*20,y:1.015,text:'80%',font:{size:10}});}
 const layout={height:400,width:1400,margin:{l:62,r:62,t:36,b:62},meta:{},xaxis:{range:[0,1440]},annotations};
 """
@@ -68,7 +68,7 @@ for(const a of names){const p=annotations.find(v=>v.name===a.name&&v.y>1);assert
     def test_nonaggregate_panels_keep_multiple_days_without_mode_control(self):
         source=(Path(__file__).parents[1]/'panel_view.js').read_text()
         source=source[source.index('function panelHasMedian'):source.index('function panelModeControls')]
-        context="""const assert=require('assert');const selectedDays=['2026-01-01','2026-01-02'];const dateCycled=false;const currentOverlay='Glucose';
+        context="""const assert=require('assert');const workspaceGraphs=false;const selectedDays=['2026-01-01','2026-01-02'];const dateCycled=false;const currentOverlay='Glucose';
 const specs=[{layout:{meta:{dataset:'target'}}},{layout:{meta:{dataset:'glucose'}}},{layout:{meta:{kind:'custom',custom_id:'custom-1'}}}];
 function panelStateAt(){return {mode:'Median + band'};}function customState(){return {selected:new Set(['ns:target','profile:basal:0'])};}
 """

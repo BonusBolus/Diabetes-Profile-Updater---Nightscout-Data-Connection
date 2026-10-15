@@ -3,9 +3,7 @@ from collections import OrderedDict
 
 
 def cached(loaded, namespace, key, build, limit=32):
-    root=loaded.get('_chart_cache')
-    if root is None:
-        return build()
+    root=loaded.setdefault('_chart_cache',{})
     bucket=root.setdefault(namespace,OrderedDict())
     if key in bucket:
         value=bucket.pop(key);bucket[key]=value

@@ -14,7 +14,9 @@ from garmin_charts import activity_shapes, SLEEP_DAY_HEIGHT
 from nightscout_charts import graph_figures, hourly_figure, date_label
 from report_stats import report_range, observed_stats, day_window
 
-SECTIONS=('overview','profiles','median','statistics','daily','overlay','distribution')
+from report_config import BLOCKS
+from report_profiles import base_profiles, context as profile_context, graphical_profiles
+from chart_cache import cached
 
 
 def fmt(value,digits=1):
@@ -30,7 +32,8 @@ def distribution_bar(row,prefix='own'):
     return '<div class="distribution">'+''.join(f'<span style="width:{row[prefix+"_"+key]:.6f}%;background:{color}"></span>' for key,color in [('below','#e76b73'),('within','#47a85e'),('above','#dfad35')])+'</div>'
 
 
-def overview(stats,unit):
+def overview(stats,unit,fields=None):
+    fields=set(fields if fields is not None else ('coverage','glucose','treatments','events','app_range','comparison_range'))
     s=stats['total'];counts=s['changes']
     rows=[('Dates evaluated',str(s['days'])),('Glucose readings',str(s['readings'])),('Observed 5-minute bins',f'{s["bins"]} / {s["expected"]} expected'),
           ('Glucose coverage',fmt(s['coverage'])+'%'),('Site changes (recorded)',fmt(counts['Site Change'],0)),
@@ -39,9 +42,12 @@ def overview(stats,unit):
           ('Standard deviation',fmt(s['sd'])+' '+unit),('Coefficient of variation',fmt(s['cv'])+'%'),
           ('Recorded bolus total',fmt(s['bolus'],3)+' U'),('Recorded carbs total',fmt(s['carbs'],0)+' g'),
           ('Average recorded bolus / day',fmt(s['bolus_daily'],3)+' U'),('Average recorded carbs / day',fmt(s['carbs_daily'])+' g')]
+    ranges={'coverage':range(0,4),'events':range(4,7),'glucose':range(7,12),'treatments':range(12,16)}
+    rows=[row for i,row in enumerate(rows) if any(i in ids and key in fields for key,ids in ranges.items())]
     html='<div class="overview-grid">'+table(['Measure','Value'],rows)+'<div>'
     scale=1 if unit=='mmol/L' else 18
     for prefix,title,lo in [('own','App range',4),('standard','3.9–10 comparison range',3.9)]:
+        if ('app_range' if prefix=='own' else 'comparison_range') not in fields:continue
         html+='<h3>'+title+'</h3>'+distribution_bar(s,prefix)+table(['Glucose '+unit,'% observed bins'],[
             ('Below '+fmt(lo*scale),fmt(s[prefix+'_below'])),(fmt(lo*scale)+'–'+fmt(10*scale),fmt(s[prefix+'_within'])),('Above '+fmt(10*scale),fmt(s[prefix+'_above']))])
     html+='</div></div><p class="note">Statistics use one median value per observed 5-minute bin. Missing bins are excluded from glucose percentages; coverage is shown separately. Bin minima/maxima may differ from individual readings. App range includes both endpoints.</p>'
@@ -66,26 +72,8 @@ def statistics_pages(stats,unit,layout='landscape'):
 
 
 def profile_pages(loaded,days,window):
-    groups={}
-    for row in loaded.get('recorded_profiles',[]):
-        start=pd.Timestamp(row['start']);end=min(pd.Timestamp(row['end']),loaded['loaded_at'])
-        overlaps=[]
-        for day in days:
-            a,b=day_window(day,window,loaded['zone'])
-            if max(start,a)<min(end,b):overlaps.append((max(start,a),min(end,b)))
-        if not overlaps:continue
-        raw=row.get('base_profile')
-        if raw is None and row.get('percentage')==100 and row.get('timeshift') in (None,0):raw=row['profile']
-        # Unknown base schedules remain one clearly marked entry per base name.
-        raw=raw or {};key=(row['name'],json.dumps(raw,sort_keys=True))
-        group=groups.setdefault(key,dict(name=row['name'],profile=raw,periods=[]));group['periods'].extend(overlaps)
-    # Merge unknown percentage states into a single known base when unambiguous.
-    for key in list(groups):
-        if groups[key]['profile']:continue
-        known=[k for k in groups if k[0]==key[0] and groups[k]['profile']]
-        if len(known)==1:groups[known[0]]['periods'].extend(groups.pop(key)['periods'])
     pages=[]
-    for group in groups.values():
+    for group in base_profiles(loaded,days,window):
         p=group['profile'];unit=str(p.get('units','unknown units'))
         periods=group['periods'];zone=ZoneInfo(loaded['zone'])
         rows=[]
@@ -99,11 +87,12 @@ def profile_pages(loaded,days,window):
                     seconds=int(item['timeAsSeconds']);at=f'{seconds//3600:02d}:{seconds%3600//60:02d}'
                 rows.append((label,str(at or '?'),str(item.get('value','?')),units))
         for offset in range(0,len(rows),19):
-            body='<p><strong>'+escape(group['name'])+'</strong> · Schedule timezone: '+escape(str(p.get('timezone','unknown')))+' · DIA: '+escape(str(p.get('dia','not recorded')))+' h</p>'
+            body='<p><strong>'+escape(group['label'])+'</strong> · Recorded profile timezone: '+escape(', '.join(group['timezones']))+' · DIA: '+escape(str(p.get('dia','not recorded')))+' h</p>'
+            body+='<p class="note">'+escape(profile_context(group,loaded))+'</p>'
             body+=table(['Setting','Time','Value','Unit'],rows[offset:offset+19])
             body+='<p class="note">Base schedule from an uploaded unmodified profile switch or a recorded 100% unshifted state. Percentage states are grouped under this base name. If no base schedule was uploaded, values are marked unavailable; adjusted schedules are not substituted.</p>'
             # Keep long activity histories readable on separate pages.
-            pages.append(dict(title='Base profiles · '+group['name'],html=body))
+            pages.append(dict(title='Base profiles · '+group['label'],html=body))
     if not pages:pages=[dict(title='Used profiles',html='<p>No effective-profile history was returned for this period. Reload Nightscout after updating; requested profile switches or the current editor profile are not assumed to be historical active profiles.</p>')]
     return pages
 
@@ -122,76 +111,123 @@ def histogram(stats,unit):
     return json.loads(fig.to_json())
 
 
-def graph_bundle(loaded,nav,config,days,window,mode,job_id):
-    profile=go.Figure(nav.get('report_profile',{}));profiles={k:go.Figure(v) for k,v in nav.get('profiles',{}).items()}
-    if config.get('metric') in profiles:profile=profiles[config['metric']]
-    custom_profiles={k:go.Figure(v) for k,v in nav.get('report_profiles',{}).items()}
-    overlay=config.get('overlay','None') if not nav.get('data_only') else 'None'
-    figs=graph_figures(profile,loaded,days,mode,nav['layers'],nav['unit'],False,overlay=overlay,data_only=nav.get('data_only',False))
-    raw=[json.loads(f.to_json()) for f in figs]
-    custom_ids=config.get('customVisible',nav.get('custom_ids'))
-    state=deepcopy(config);state['defaultMode']=mode
-    # Report section modes are explicit; preserve all independent content/settings
-    # and duplicated panels while applying that section's aggregation.
-    for panel in state.get('panels',[]):panel['mode']=mode
+def graph_bundle(loaded,nav,config,days,window,mode,job_id,block=None):
     from graph_view import figure_identity
-    # A report section has a fixed mode: do not build an unused alternate bank.
-    banks={mode:{figure_identity(f):r for f,r in zip(figs,raw)}} if len(days)>1 else {}
+    from nightscout_charts import LAYERS, GROUP_KEYS, normalize_layers
+    state=deepcopy(config);state['defaultMode']=mode
+    selected=[]
+    for panel in state.get('panels',[]):
+        kind=panel.get('graphType','daily')
+        wanted=(kind=='daily' if block=='daily' else kind=='insight' if block=='insights' else kind in ('summary','overlay') if block=='summary' else
+                kind=='daily' if mode=='One day' else kind=='overlay' if mode=='Multiple days' else kind in ('summary','insight'))
+        if state.get('workspaceVersion'):panel['deleted']=panel.get('deleted',False) or not wanted
+        elif block:panel['graphType']={'daily':'daily','summary':'summary','insights':'insight'}[block]
+        if not panel.get('deleted'):selected.append(panel)
+    if state.get('workspaceVersion') and not selected:return None
+    bases={p.get('base','') for p in selected}
+    datasets={b.split(':',1)[-1] for b in bases}
+    if 'compact:glucose' in bases:datasets.add('compact')
+    if any(b.startswith('custom:') for b in bases):datasets.add('custom')
+    if ':iob' in bases:datasets.add('bolus')
+    if ':cob' in bases:datasets.add('carbs')
+    layers=[label for label in normalize_layers(nav['layers']) if not state.get('workspaceVersion') or any(k in datasets for k in GROUP_KEYS.get(LAYERS[label],[LAYERS[label]]))]
+    profile=go.Figure(nav.get('report_profile',{}));profiles=nav.get('profiles',{})
+    if config.get('metric') in profiles:profile=go.Figure(profiles[config['metric']])
+    overlay=config.get('overlay','None') if not nav.get('data_only') else 'None'
+    modes={mode}
+    if block=='summary':modes={p.get('mode','Median + band') for p in selected} or {mode}
+    mode='Median + band' if 'Median + band' in modes else next(iter(modes))
+    banks={};raw=None
+    for variant in sorted(modes):
+        figs=graph_figures(profile,loaded,days,variant,layers,nav['unit'],False,overlay=overlay,data_only=nav.get('data_only',False),only_datasets=datasets if state.get('workspaceVersion') else None)
+        values=[json.loads(f.to_json()) for f in figs]
+        banks[variant]={figure_identity(f):r for f,r in zip(figs,values)}
+        if variant==mode:raw=values
+    custom=None
+    if 'Custom graph' in layers:
+        ids={key for p in selected for key in (p.get('custom') or {}).get('selected',[])}
+        if not state.get('workspaceVersion'):ids=None
+        custom_profiles={k:go.Figure(v) for k,v in nav.get('report_profiles',{}).items()}
+        custom=custom_bundle(loaded,days,days,mode,nav['unit'],False,custom_profiles,field_ids=ids)
+        for variant in modes:
+            bank=custom if variant==mode else custom_bundle(loaded,days,days,variant,nav['unit'],False,custom_profiles,field_ids=ids)
+            by_id={f['id']:f for f in bank['fields']}
+            for field in custom['fields']:field.setdefault('modes',{})[variant]=by_id[field['id']]['selected']
     chosen={str(d) for d in days}
-    events=[dict(event,intervals=[p for p in event.get('intervals',[]) if p['date'] in chosen])
-            for event in nav.get('profile_events',[]) if event['date'] in chosen or any(p['date'] in chosen for p in event.get('intervals',[]))]
-    navigation=dict(mode_banks=banks,sleep_day_height=SLEEP_DAY_HEIGHT,state_scope='report-'+job_id,config_revision=1,saved_config=state,report_render=dict(id=job_id,range=window),
-                    data_only=nav.get('data_only',False),selected=[str(d) for d in days],days=[str(d) for d in days],mode=mode,unit=nav['unit'],
-                    layers=nav['layers'],metric=config.get('metric'),profiles=nav.get('profiles',{}),
-                    overlay=overlay,overlays={overlay:dict(selected=raw[0],daily=raw[0])},figures=raw,
-                    show_targets=config.get('showTargets',True),same_scale=config.get('sameScale',False),
-                    custom_ids=custom_ids,custom_catalog=[p['id'] for p in config.get('customPanels',[])],
-                    custom=custom_bundle(loaded,days,days,mode,nav['unit'],False,custom_profiles) if 'Custom graph' in nav['layers'] else None,
-                    automation_notes=[e for e in nav.get('automation_notes',[]) if e['date'] in chosen],
-                    activity_bands=activity_shapes(loaded,days,'One day'),change_events=[e for e in nav.get('change_events',[]) if e['date'] in chosen],profile_events=events,
-                    garmin_units=nav.get('garmin_units'),garmin_sleep_notes=[n for n in nav.get('garmin_sleep_notes',[]) if n['date'] in chosen],summaries=[],garmin_daily=[],garmin_activities=[])
-    if len(set(days))>1 and 'IOB + Boluses' in nav['layers']:
-        f=json.loads(hourly_figure(loaded,'bolus',days,False,exclude_smb=True).to_json())
-        navigation['bolus_without_smb']=dict(selected=f,daily=f)
+    events=[dict(event,intervals=[p for p in event.get('intervals',[]) if p['date'] in chosen]) for event in nav.get('profile_events',[]) if event['date'] in chosen or any(p['date'] in chosen for p in event.get('intervals',[]))]
+    navigation=dict(workspace_graphs=bool(state.get('workspaceVersion')),mode_banks=banks,sleep_day_height=SLEEP_DAY_HEIGHT,state_scope='report-'+job_id,config_revision=1,saved_config=state,report_render=dict(id=job_id,range=window),
+                    day_color_dates=nav.get('day_color_dates',nav.get('days',[str(d) for d in days])),data_only=nav.get('data_only',False),selected=[str(d) for d in days],days=[str(d) for d in days],mode=mode,unit=nav['unit'],
+                    layers=layers,metric=config.get('metric'),profiles=profiles,overlay=overlay,overlays={overlay:dict(selected=raw[0],daily=raw[0])},figures=raw,
+                    show_targets=config.get('showTargets',True),same_scale=config.get('sameScale',False),custom=custom,
+                    custom_ids=config.get('customVisible',nav.get('custom_ids')),custom_catalog=[p['id'] for p in config.get('customPanels',[])],
+                    automation_notes=[e for e in nav.get('automation_notes',[]) if e['date'] in chosen],activity_bands=activity_shapes(loaded,days,'One day'),
+                    change_events=[e for e in nav.get('change_events',[]) if e['date'] in chosen],profile_events=events,garmin_units=nav.get('garmin_units'),
+                    garmin_sleep_notes=[n for n in nav.get('garmin_sleep_notes',[]) if n['date'] in chosen],summaries=[],garmin_daily=[],garmin_activities=[])
+    from compact_glucose import basal_records
+    from nightscout import daily_summary
+    if 'Glucose Compact' in layers:
+        navigation['compact_basal']=cached(loaded,'compact_basal',tuple(days),lambda:basal_records(loaded,days))
+        navigation['summaries']=cached(loaded,'daily_stats',(tuple(days),nav['unit']),lambda:daily_summary(loaded,days,nav['unit']))
+    if len(set(days))>1 and 'IOB + Boluses' in layers:
+        f=json.loads(hourly_figure(loaded,'bolus',days,False,exclude_smb=True).to_json());navigation['bolus_without_smb']=dict(selected=f,daily=f)
     return dict(specs=raw,navigation=navigation)
 
 
-def build_report(loaded,nav,request):
+def build_report(loaded,nav,request,progress=None):
     from graph_view import viewer_html,pack_payload
     from report_config import settings
     request=dict(request,**settings(request))
     days,window=report_range(request,loaded)
-    sections=[s for s in SECTIONS if s in request.get('sections',[])]
-    if len(days)==1:sections=[s for s in sections if s not in ('median','overlay')]
-    if not sections:raise ValueError('Choose at least one report section valid for these dates.')
-    config=request.get('config')
+    blocks=[b for b in request['blocks'] if b['key']!='summary' or len(days)>1]
+    if not blocks:raise ValueError('Choose at least one report block valid for these dates.')
+    config=request.get('config',request.get('viewer'))
     if not isinstance(config,dict):raise ValueError('Graph configuration is missing. Export from the graph toolbar.')
     title=str(request.get('title') or 'Profile Studio report')[:120]
-    stats=observed_stats(loaded,days,window,nav['unit']);jobs=[]
-    for section in sections:
-        if section=='overview':jobs.append(dict(title='Overview',html=overview(stats,nav['unit'])))
+    total=2+sum(len(days) if b['key']=='daily' else 1 for b in blocks);done=0
+    if progress:progress(done,total,'Preparing report blocks')
+    stats=None
+    if any(b['key'] in ('overview','statistics','distribution') for b in blocks):
+        stats=cached(loaded,'report_stats',(tuple(days),tuple(window),nav['unit']),lambda:observed_stats(loaded,days,window,nav['unit']),limit=4)
+    jobs=[];done=1
+    labels=dict(overview='Overview',profiles='Base profiles',profile_graphs='Graphical profile overview',statistics='Daily statistics',distribution='Glucose distribution',daily='Daily graphs',summary='Summary graphs',insights='Insight graphs')
+    for block in blocks:
+        section=block['key'];start=len(jobs)
+        if progress:progress(done,total,'Preparing '+labels[section])
+        if section=='overview':jobs.append(dict(title='Overview',html=overview(stats,nav['unit'],request.get('overview_fields'))))
         elif section=='statistics':jobs.extend(statistics_pages(stats,nav['unit'],request['layout']))
         elif section=='profiles':jobs.extend(profile_pages(loaded,days,window))
+        elif section=='profile_graphs':
+            figures=graphical_profiles(loaded,days,window,nav['unit'])
+            if figures:jobs.append(dict(title=labels[section],figures=figures))
         elif section=='distribution':jobs.append(dict(title='Distribution of glucose values',figure=histogram(stats,nav['unit']),note='Percent of observed five-minute glucose bins; gaps are excluded. Colors follow the app range (4–10 mmol/L).'))
         else:
-            mode={'median':'Median + band','daily':'One day','overlay':'Multiple days'}[section]
+            mode='One day' if section=='daily' else 'Median + band'
             for subset in ([[d] for d in days] if section=='daily' else [days]):
-                job_id=str(len(jobs));jobs.append(dict(title={'median':'Median selected graphs','daily':'Daily graphs','overlay':'All days overlaid'}[section]+' · '+date_label(subset),
-                                                     payload=graph_bundle(loaded,nav,config,subset,window,mode,job_id),note='Time windows clip the graphs. Hourly bins retain whole-hour totals; cumulative steps remain totals since the start of each day.'))
-    portrait=request['layout']=='portrait';count=request['graphs_per_page']
-    # Match the actual printable image slot; resize Plotly itself, never crop SVGs.
-    width=1000 if portrait else 1320
-    slot_mm=(210 if portrait else 140)/count
-    height=round(width*slot_mm/(176 if portrait else 263))
+                if progress:progress(done,total,labels[section]+' · '+date_label(subset))
+                if section=='daily':done+=1
+                payload=graph_bundle(loaded,nav,block.get('viewer',config),subset,window,mode,str(len(jobs)),block=section)
+                if payload:
+                    heading={'daily':'Daily','summary':'Summary','insights':'Insights'}[section]+' · '+date_label(subset)
+                    jobs.append(dict(title=heading,payload=payload,note=''))
+        for job in jobs[start:]:
+            job.update(block=section,graphs_per_page=block['graphs_per_page'])
+            if section not in ('daily','summary','insights'):
+                job['title']={'profile_graphs':'Profiles','statistics':'Statistics','distribution':'Glucose distribution'}.get(section,labels[section])+' · '+date_label(days)
+        if section!='daily':done+=1
+    if not jobs:raise ValueError('No report content is available. Add graphs to the selected report blocks, or choose a block with loaded data, then save the preset.')
+    if progress:progress(done,total,'Bundling report')
+    portrait=request['layout']=='portrait';count=request['graphs_per_page'];width=1000 if portrait else 1320
+    slot_mm=(210 if portrait else 140)/count;height=round(width*slot_mm/(176 if portrait else 263))
     for job in jobs:
-        if 'payload' in job:
-            job['payload']['navigation']['report_render'].update(width=width,height=height,compact=count>=3,capacity=count,note_width=(176 if portrait else 263)*96/25.4)
-            job['payload']=pack_payload(job['payload'])
+        if 'payload' in job:job['payload']=pack_payload(job['payload'])
     # Template is bundled once, reused in a sequential offscreen renderer. The
     # ordinary viewer remains untouched and all existing graph transforms run.
     template=viewer_html([go.Figure()],False,None)
     template=re.sub(r'const payload = .*?;\nconst specs =', 'const payload = __REPORT_PAYLOAD__;\nconst specs =',template,count=1)
-    info=dict(title=title,period=f'{days[0]} – {days[-1]} · {request.get("from_time","00:00")}–{request.get("until_time","24:00")} each day · {loaded["zone"]}',
+    info=dict(title=title,filename=f'profile-studio-{days[0]}-{days[-1]}.html',period=f'{request.get("from_time","00:00")}–{request.get("until_time","24:00")} · {loaded["zone"]}',
+              context_profiles=[e for e in nav.get('profile_events',[]) if e['date'] in {str(d) for d in days}],
+              context_changes=[e for e in nav.get('change_events',[]) if e['date'] in {str(d) for d in days}],
+              reserve_automation=any(e['date'] in {str(d) for d in days} and window[0]<=e['minute']<=window[1] for e in nav.get('automation_notes',[])),
               generated=datetime.now(ZoneInfo(loaded['zone'])).strftime('%Y-%m-%d %H:%M %Z'),jobs=jobs,template=template,
               settings=json.dumps(config,ensure_ascii=False,indent=2),layout=request['layout'],graphs_per_page=count,chart_height_mm=slot_mm,render_width=width,render_height=height)
     script=Path(__file__).with_name('report_document.js').read_text(encoding='utf-8')

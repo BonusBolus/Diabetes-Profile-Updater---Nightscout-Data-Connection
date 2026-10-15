@@ -1,18 +1,19 @@
 <!doctype html><html><head><meta charset="utf-8"><style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden}iframe{width:100%;height:100%;border:0}
 </style></head><body><iframe id="graphs" title="Health graphs" allow="fullscreen" allowfullscreen></iframe><script>
-const frame=document.getElementById('graphs');let html='',restore=null;
+const frame=document.getElementById('graphs');let html='',restore=null,picker=0,viewerHeight=null,reportResult=null;
 const send=(type,extra={})=>window.parent.postMessage({isStreamlitMessage:true,type,...extra},'*');
-function restoreGraph(){if(restore)frame.contentWindow.postMessage({type:'profile-studio:restore-graph',request:restore},'*');}
+function restoreGraph(){if(picker)frame.contentWindow.postMessage({type:'profile-studio:open-picker',revision:picker},'*');if(restore)frame.contentWindow.postMessage({type:'profile-studio:restore-graph',request:restore},'*');if(reportResult)frame.contentWindow.postMessage({type:'profile-studio:report-result',result:reportResult},'*');}
 frame.addEventListener('load',restoreGraph);
 window.addEventListener('message',event=>{
   if(event.source===window.parent && event.data?.type==='streamlit:render'){
     const args=event.data.args;
-    restore=args.restore_graph;
-    document.body.style.height=args.height+'px';
-    if(args.html!==html){html=args.html;frame.srcdoc=html;}else restoreGraph();
-    send('streamlit:setFrameHeight',{height:args.height});
+    restore=args.restore_graph;picker=args.picker_revision || 0;reportResult=args.report_result || null;
+    document.body.style.height=(viewerHeight || args.height)+'px';
+    if(args.html!==html){viewerHeight=null;html=args.html;frame.srcdoc=html;}else restoreGraph();
+    send('streamlit:setFrameHeight',{height:viewerHeight || args.height});
   }
+  if(event.source===frame.contentWindow && event.data?.type==='profile-studio:height'){viewerHeight=Math.max(130,Math.min(1600,event.data.height));document.body.style.height=viewerHeight+'px';send('streamlit:setFrameHeight',{height:viewerHeight});}
   if(event.source===frame.contentWindow && ['profile-studio:save','profile-studio:report','profile-studio:graph-visibility'].includes(event.data?.type)){
     send('streamlit:setComponentValue',{value:event.data.request,dataType:'json'});
   }

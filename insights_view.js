@@ -21,30 +21,54 @@ function insightControls(parent,panel,spec,content=parent){
     panelUIs.push({insightOnly:true,panel,id:state.id,el:slider,field:'maxStartCOB',wrap,visible:o=>o.filterStartCOB===true,onSync:update});
   }
   const relation=o=>key==='sleep' && o.sleepView==='relationship';
+  const overview=o=>key==='sleep' && o.sleepView==='overview';
   if(['meal','sleep','activity_during','activity_after','site_age','sensor'].includes(key))for(const [field,label] of [['showIOB','IOB'],['showCOB','COB']]){
     const el=document.createElement('button');el.type='button';el.setAttribute('aria-label',label+' overlay');
     el.title='Uploaded estimates aligned to the same event windows; gaps stay missing. Hover shows contributing periods.';
     el.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{s.insight[field]=!s.insight[field];s.axisRanges={};}));content.appendChild(el);
-    panelUIs.push({insightOnly:true,panel,id:state.id,el,field,visible:o=>!relation(o),toggle:o=>label+': '+(o[field]?'on':'off')});
+    panelUIs.push({insightOnly:true,panel,id:state.id,el,field,visible:o=>!relation(o)&&!overview(o),toggle:o=>label+': '+(o[field]?'on':'off')});
   }
   const select=(name,items,field,visible=null)=>{const el=document.createElement('select');el.setAttribute('aria-label',name);
     for(const [v,label] of items){const o=document.createElement('option');o.value=v;o.textContent=label;el.appendChild(o);}el.value=state.insight[field];
     el.addEventListener('change',()=>changePanelState(panel.graphIndex,s=>{s.insight[field]=el.value;if(field!=='aggregation')s.axisRanges={};}));parent.appendChild(el);
     panelUIs.push({insightOnly:true,panel,id:state.id,el,field,visible});return el;};
   if(key==='sleep'){
-    select('Sleep insight view',[['overnight','During sleep'],['after','After waking'],['relationship','Sleep → next-day glucose']],'sleepView');
+    select('Sleep insight view',[['overnight','During sleep'],['overview','Nights · sleep + glucose'],['after','After waking'],['relationship','Sleep → next-day glucose']],'sleepView');
     select('Sleep relationship X',[['asleep_hours','Recorded asleep (h)'],['hrv','Overnight HRV (ms)']],'relationX',relation);
     select('Sleep relationship Y',[['mean','Next-day mean glucose'],['tir','Next-day time in range'],['below','Next-day time below range']],'relationY',relation);
+    const wrap=document.createElement('label'),slider=document.createElement('input'),text=document.createElement('span');
+    slider.type='range';slider.min='0';slider.max='12';slider.step='.5';slider.value=sleepOverviewHours(state.insight);slider.setAttribute('aria-label','Overview hours after waking');
+    const update=()=>{text.textContent='After waking: '+slider.value+' h';};update();slider.addEventListener('input',update);
+    slider.addEventListener('change',()=>changePanelState(panel.graphIndex,s=>{s.insight.overviewAfterHours=Number(slider.value);}));
+    wrap.append(text,slider);parent.appendChild(wrap);panelUIs.push({insightOnly:true,panel,id:state.id,el:slider,field:'overviewAfterHours',wrap,visible:overview,onSync:update});
+    const signalLayout=document.createElement('button');signalLayout.type='button';signalLayout.setAttribute('aria-label','Night sleep signal layout');
+    signalLayout.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{s.insight.sleepOverlay=!s.insight.sleepOverlay;s.axisRanges={};}));parent.appendChild(signalLayout);
+    panelUIs.push({insightOnly:true,panel,id:state.id,el:signalLayout,field:'sleepOverlay',visible:overview,toggle:o=>'Sleep signals: '+(o.sleepOverlay?'Overlay':'Underneath')});
+    const choices=document.createElement('details'),heading=document.createElement('summary');heading.textContent='Sleep overlays';choices.appendChild(heading);content.appendChild(choices);
+    panelUIs.push({insightOnly:true,panel,id:state.id,el:choices,field:'sleepFields',visible:overview});
+    for(const [field,label] of Object.entries(sleepFields)){
+      const el=document.createElement('button');el.type='button';el.textContent=label;el.setAttribute('aria-label','Night sleep overlay '+label);choices.appendChild(el);
+      const available=(spec.layout.meta.sleep_overview_rows || []).some(r=>r.signals?.[field]?.y.some(Number.isFinite));
+      el.title=available?'Show recorded '+label.toLowerCase():'No recorded '+label.toLowerCase()+' in the loaded nights';
+      el.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{const fields=s.insight.sleepFields || [];s.insight.sleepFields=fields.includes(field)?fields.filter(k=>k!==field):[...fields,field];s.axisRanges={};}));
+      panelUIs.push({insightOnly:true,panel,id:state.id,el,field:'sleepFields',visible:overview,onSync:()=>{el.disabled=!ready||syncing||!available;el.setAttribute('aria-pressed',String((panelStateAt(panel.graphIndex).insight.sleepFields || []).includes(field)));}});
+    }
+    for(const [step,label] of [[-1,'Older nights'],[1,'Newer nights']]){
+      const el=document.createElement('button');el.type='button';el.textContent=label;
+      const last=Math.max(0,Math.ceil((spec.layout.meta.sleep_overview_rows || []).length/7)-1);
+      el.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{s.insight.overviewPage=Math.max(0,Math.min(last,(s.insight.overviewPage || 0)+step));}));parent.appendChild(el);
+      panelUIs.push({insightOnly:true,panel,id:state.id,el,field:'overviewPage',visible:overview,onSync:()=>{const p=Math.min(last,panelStateAt(panel.graphIndex).insight.overviewPage || 0);el.disabled=!ready||syncing||(step<0?p<=0:p>=last);}});
+    }
   }
   if(key==='site_age')select('Site window',[['full','Until next replacement'],['limited','First hours']],'siteWindow');
-  const statistic=select('Glucose and overlays statistic',[['Median','Median · glucose + overlays'],['Average','Average · glucose + overlays']],'aggregation',o=>!relation(o));
+  const statistic=select('Glucose and overlays statistic',[['Median','Median · glucose + overlays'],['Average','Average · glucose + overlays']],'aggregation',o=>!relation(o)&&!overview(o));
   statistic.title='One statistic for glucose and all enabled IOB/COB overlays. Bands always show the 25th–75th percentiles.';
   if(key==='sensor_variability')select('Sensor-age variability metric',[['rate','Variability · |ΔBG/Δt|'],['jump','Jumpiness · |Δ slope|']],'metric');
-  else if(key!=='sensor')select('Event glucose display',[['absolute','Absolute glucose'],['delta','Δ glucose from t=0']],'normalization',o=>!relation(o));
+  else if(key!=='sensor')select('Event glucose display',[['absolute','Absolute glucose'],['delta','Δ glucose from t=0']],'normalization',o=>!relation(o)&&!overview(o));
   if(key!=='sensor_variability'){
     const el=document.createElement('button');el.type='button';el.setAttribute('aria-label','Insight glucose Y-axis');
     el.addEventListener('click',()=>changePanelState(panel.graphIndex,s=>{s.insight.fitY=!s.insight.fitY;s.axisRanges={};}));parent.appendChild(el);
-    panelUIs.push({insightOnly:true,panel,id:state.id,el,field:'fitY',visible:o=>relation(o)?o.relationY==='mean':o.normalization!=='delta',
+    panelUIs.push({insightOnly:true,panel,id:state.id,el,field:'fitY',visible:o=>overview(o)|| (relation(o)?o.relationY==='mean':o.normalization!=='delta'),
       toggle:o=>'Y axis: '+(o.fitY?'fitted':navigation.unit==='mg/dL'?'0–360':'0–20')});
   }
   if(['activity_after','site_age','meal','sleep'].includes(key)){
@@ -52,7 +76,7 @@ function insightControls(parent,panel,spec,content=parent){
     const label=document.createElement('label'),slider=document.createElement('input'),text=document.createElement('span');slider.type='range';slider.min='.5';slider.max=key==='sleep'?'24':key==='meal'?'12':'72';slider.step='.5';slider.value=state.insight.duration;slider.setAttribute('aria-label','Post-event hours');
     text.textContent=prefix+slider.value+' h';slider.addEventListener('input',()=>{text.textContent=prefix+slider.value+' h';});slider.addEventListener('change',()=>changePanelState(panel.graphIndex,s=>{s.insight.duration=Number(slider.value);}));label.append(text,slider);parent.appendChild(label);
     if(key==='site_age')slider.setAttribute('aria-label','Site window hours');
-    panelUIs.push({insightOnly:true,panel,id:state.id,el:slider,wrap:label,text,prefix,field:'duration',visible:o=>key==='site_age'?o.siteWindow==='limited':key!=='sleep' || o.sleepView!=='overnight'});
+    panelUIs.push({insightOnly:true,panel,id:state.id,el:slider,wrap:label,text,prefix,field:'duration',visible:o=>key==='site_age'?o.siteWindow==='limited':key!=='sleep' || !['overnight','overview'].includes(o.sleepView)});
   }
 }
 function insightMedian(values,p=.5){const vs=values.filter(Number.isFinite).sort((a,b)=>a-b);if(!vs.length)return null;const pos=(vs.length-1)*p,lo=Math.floor(pos);return vs[lo]+(vs[Math.ceil(pos)]-vs[lo])*(pos-lo);}
@@ -81,15 +105,19 @@ function calculateInsight(series,metric,delta,limit,bin,aggregation){
     if(delta && first!==null && first<=10){alignedBaselines++;if(first>0){xs.unshift(0);ys.unshift(0);}}
     for(const [slot,values] of per){const valuesAt=bins.get(slot)||[];valuesAt.push(insightAggregate(values,aggregation));bins.set(slot,valuesAt);}
     if(ys.some(Number.isFinite))traces.push({type:'scatter',x:xs,y:ys,mode:'lines',line:{width:1.1},connectgaps:false,opacity:.25,name:s.label,
-      meta:{kind:'insight_event',label:s.label,event_id:s.id},showlegend:false});
+      meta:{kind:'insight_event',label:s.label,event_id:s.id,date:s.date || s.label.match(/\d{4}-\d{2}-\d{2}/)?.[0]},showlegend:false});
   }
   const last=Math.max(0,...bins.keys()),xs=[],aggregate=[],lower=[],upper=[],counts=[];
   for(let slot=0;slot<=last;slot+=bin){const vals=bins.get(slot)||[];xs.push((slot+bin/2)/60);aggregate.push(insightAggregate(vals,aggregation));lower.push(vals.length>=2?insightMedian(vals,.25):null);upper.push(vals.length>=2?insightMedian(vals,.75):null);counts.push(vals.length);}
-  const band=[];let start=null;
-  for(let i=0;i<=xs.length;i++){
-    if(i<xs.length && Number.isFinite(lower[i])&&Number.isFinite(upper[i])){if(start===null)start=i;continue;}
-    if(start!==null){let xx=xs.slice(start,i),lo=lower.slice(start,i),hi=upper.slice(start,i);if(xx.length===1){xx=[xx[0]-bin/120,xx[0]+bin/120];lo=[lo[0],lo[0]];hi=[hi[0],hi[0]];}
-      band.push({type:'scatter',x:xx.concat(xx.slice().reverse()),y:lo.concat(hi.slice().reverse()),mode:'lines',line:{width:0},fill:'toself',fillcolor:'rgba(70,150,190,.22)',name:'25–75%',legendgroup:'insight-iqr',showlegend:band.length===0,hoverinfo:'skip',meta:{kind:'insight_band',legend_entry:band.length===0}});start=null;}
+  const band=[];
+  for(const [ql,qh,label] of [[.10,.90,'10–90%'],[.25,.75,'25–75%']]){
+    const loValues=xs.map((_,i)=>{const vals=bins.get(i*bin)||[];return vals.length>=2?insightMedian(vals,ql):null;});
+    const hiValues=xs.map((_,i)=>{const vals=bins.get(i*bin)||[];return vals.length>=2?insightMedian(vals,qh):null;});let start=null,first=true;
+    for(let i=0;i<=xs.length;i++){
+      if(i<xs.length && Number.isFinite(loValues[i])&&Number.isFinite(hiValues[i])){if(start===null)start=i;continue;}
+      if(start!==null){let xx=xs.slice(start,i),lo=loValues.slice(start,i),hi=hiValues.slice(start,i);if(xx.length===1){xx=[xx[0]-bin/120,xx[0]+bin/120];lo=[lo[0],lo[0]];hi=[hi[0],hi[0]];}
+        band.push({type:'scatter',x:xx.concat(xx.slice().reverse()),y:lo.concat(hi.slice().reverse()),mode:'lines',line:{width:0},fill:'toself',fillcolor:'rgba(70,150,190,.22)',name:label,legendgroup:'insight-'+label,showlegend:first,hoverinfo:'skip',meta:{kind:'insight_band',percentile:label,legend_entry:first}});first=false;start=null;}
+    }
   }
   if(delta && alignedBaselines){xs.unshift(0);aggregate.unshift(0);counts.unshift(alignedBaselines);}
   return {traces,band,xs,aggregate,counts,maximum,noBaseline};
@@ -176,7 +204,7 @@ function insightSummaries(meta,options,unit){
   return [...periods.values()];
 }
 function transformSleepRelationship(view,index){
-  const options=panelStateAt(index).insight,unit=navigation.unit || 'mmol/L';
+  const state=panelStateAt(index),options=state.insight,unit=navigation.unit || 'mmol/L';
   const rows=insightSummaries(view.layout.meta,options,unit),xkey=options.relationX || 'asleep_hours',ykey=options.relationY || 'mean';
   const paired=rows.filter(r=>Number.isFinite(r.sleep[xkey]) && Number.isFinite(r.next?.[ykey]));
   const xlabel=xkey==='hrv'?'Median recorded overnight HRV':'Recorded asleep',xunit=xkey==='hrv'?'ms':'h';
@@ -196,10 +224,13 @@ function transformSleepRelationship(view,index){
   view.layout.meta={...view.layout.meta,insight_relationship:true,insight_pairs:paired.length,insight_summary:rows,empty:!paired.length,insight_excluded_baselines:0};
   if(!paired.length)view.layout.annotations.push({xref:'paper',yref:'paper',x:.5,y:.5,text:'No paired sleep and next-day glucose records for these metrics',showarrow:false});
   applyPanelRanges(view,index);
-  view.layout.meta.insight_note=insightMethodNote(view,options);
+  view.layout.meta.insight_bands=state.bands;view.layout.meta.insight_note=insightMethodNote(view,options);
 }
 function insightSummaryTable(div,details){
   const meta=div.layout.meta,rows=meta.insight_summary || [];if(!['meal','sleep'].includes(meta.insight))return;
+  if(meta.sleep_overview){
+    const note=document.createElement('p');note.textContent='Recorded Garmin session boundaries are preferred; otherwise stage intervals separated by at most 30 minutes are grouped. The end of the recorded session defines waking here, not proof of actual wakefulness. Each glucose reading retains its original value. Hover shows the full local timestamp and UTC offset; repeated daylight-saving clock hours are not joined backwards. Use Newer/Older nights to browse seven rows at a time. The report includes every selected night in continuation panels.';details.appendChild(note);return;
+  }
   const note=document.createElement('p');note.textContent=meta.insight==='meal'?
     'Carbs > '+(meta.insight_carb_cutoff ?? 0)+' g · '+rows.length+' recorded periods. Each carb timestamp is an event (not necessarily a meal); simultaneous entries are summed. Each response ends at the earliest of the selected window, next carb entry (including excluded entries), or loaded-data end. Peak is observed glucose; return to range is the first observed 4–10 mmol/L reading after an above-range peak, without crossing a >10 min gap. Starting IOB/COB are the last readings ≤10 min before entry; starting COB affects inclusion only when its filter is enabled. Nearby boluses are recorded within −30/+60 min, not attributed to that meal. — means unavailable or no observed return.':
     'Sleep periods use recorded Garmin session boundaries when available; stage-only records are grouped across gaps ≤30 min. Recorded asleep counts Deep/Light/REM only; missing/unknown stages do not count as sleep. HRV is the median of recorded five-minute overnight bins, not Garmin’s nightly average. Next-day means after waking, up to the selected window, next sleep or loaded-data end (maximum 24 h). Wake dates must be selected; glucose is restricted to selected dates. Coverage shows incomplete windows. These are associations, not causal effects or significance tests.';
@@ -216,6 +247,7 @@ function insightSummaryTable(div,details){
 }
 function transformInsight(view,index){
   const state=panelStateAt(index),options=state.insight,key=view.layout.meta.insight;
+  if(key==='sleep' && options.sleepView==='overview'){transformSleepOverview(view,index);return;}
   if(key==='sleep' && options.sleepView==='relationship'){transformSleepRelationship(view,index);return;}
   const after=key==='sleep' && options.sleepView==='after',series=selectedInsightSeries(view.layout.meta,options,after),cutoff=key==='meal'?insightCarbCutoff(options):0;
   const metric=key==='sensor_variability'?options.metric:key==='sensor'?'glucose':'glucose',delta=!key.startsWith('sensor') && options.normalization==='delta';
@@ -265,7 +297,7 @@ function transformInsight(view,index){
   view.layout.meta.insight_summary=['meal','sleep'].includes(key)?insightSummaries(view.layout.meta,options,unit):[];
   addInsightContext(view,state,series,limit,bin,delta);
   applyPanelRanges(view,index);
-  view.layout.meta.insight_note=insightMethodNote(view,options);
+  view.layout.meta.insight_bands=state.bands;view.layout.meta.insight_note=insightMethodNote(view,options);
 }
 
 function addInsightContext(view,state,series,limit,bin,delta){
@@ -278,9 +310,9 @@ function addInsightContext(view,state,series,limit,bin,delta){
   for(const [i,[field,,label,unit,color]] of enabled.entries()){
     const source=primary.map(s=>({...s,x:s.context?.[field]?.x || [],value:s.context?.[field]?.value || []}));
     const result=calculateInsight(source,'value',false,limit,bin,aggregation),axis='y'+(i+2);
-    for(const band of result.band)view.data.push({...band,yaxis:axis,name:label+' 25–75%',legendgroup:field+'-iqr',
+    for(const band of result.band)view.data.push({...band,yaxis:axis,name:label+' '+band.meta.percentile,legendgroup:field+'-'+band.meta.percentile,
       fillcolor:field==='iob'?'rgba(33,150,243,.10)':'rgba(255,152,0,.10)',
-      meta:{...band.meta,kind:'insight_context_band',dataset:field,label:label+' 25–75%',unit}});
+      meta:{...band.meta,kind:'insight_context_band',dataset:field,label:label+' '+band.meta.percentile,unit}});
     view.data.push({type:'scatter',x:result.xs,y:result.aggregate,yaxis:axis,mode:'lines',connectgaps:false,
       name:aggregation+' '+label,line:{color,width:1.8},opacity:.65,customdata:result.counts,
       meta:{kind:'insight_context',label:aggregation+' '+label,unit,dataset:field,aggregation}});
@@ -313,7 +345,7 @@ function insightMethodNote(view,options){
     parts.push((meta.insight_aggregation || 'Median')+' '+signal+'; '+(key.startsWith('sensor')?'60':'5')+'-min bins.');
     const counts=meta.insight_count_range || [];
     parts.push((meta.insight_periods || 0)+' periods'+(counts.length?'; '+(counts[0]===counts[1]?counts[0]:counts[0]+'–'+counts[1])+' contributors/bin':'')+'.');
-    if(view.data.some(t=>t.meta?.kind==='insight_band'))parts.push('25–75%: between-period variation, not a confidence interval.');
+    if(view.data.some(t=>t.meta?.kind==='insight_band'))parts.push((meta.insight_bands==='Both'?'25–75% / 10–90%':meta.insight_bands || '25–75%')+': between-period variation, not a confidence interval.');
     if(signal.startsWith('Δ'))parts.push('Baseline exact/bracketed ≤10 min; '+(meta.insight_excluded_baselines || 0)+' missing excluded.');
     if(meta.insight_context?.length)parts.push(meta.insight_context.map(k=>k.toUpperCase()).join('/')+' '+(meta.insight_aggregation==='Average'?'averages':'medians')+': upload coverage may differ.');
     if(key==='sensor_variability')parts.push('Signal variability, not sensor accuracy.');

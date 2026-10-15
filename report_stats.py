@@ -17,7 +17,7 @@ def time_minute(value):
 
 def report_range(request, loaded):
     first=date.fromisoformat(request['first']);last=date.fromisoformat(request['last'])
-    if not loaded['first']<=first<=last<=loaded['last']:raise ValueError('Select dates within the loaded range; load more dates first if needed.')
+    if not loaded['first']<=first<=last<=loaded['last']:raise ValueError(f'Report dates {first} to {last} are outside loaded data ({loaded["first"]} to {loaded["last"]}). Edit the PDF preset, choose Use loaded dates, and save; or load the requested dates first.')
     if (last-first).days>365:raise ValueError('Export up to 366 days at a time.')
     window=[time_minute(request.get('from_time','00:00')),time_minute(request.get('until_time','24:00'))]
     if window[0]>=window[1]:raise ValueError('The daily start time must be earlier than the end time. Split overnight windows into separate exports.')

@@ -28,7 +28,7 @@ def continuous_summary(loaded, key, days, unit):
         return pd.DataFrame(columns=['minute','median','low','high','days'])
     values=pd.DataFrame([dict(day=day,minute=minute,value=weighted/duration) for (day,minute),(weighted,duration) in totals.items()])
     groups=values.groupby('minute')['value']
-    return pd.DataFrame(dict(median=groups.median(),low=groups.quantile(.25),high=groups.quantile(.75),days=groups.count())).reindex(range(0,1440,5)).rename_axis('minute').reset_index()
+    return pd.DataFrame(dict(median=groups.median(),low=groups.quantile(.25),high=groups.quantile(.75),p10=groups.quantile(.10),p90=groups.quantile(.90),average=groups.mean(),days=groups.count())).reindex(range(0,1440,5)).rename_axis('minute').reset_index()
 
 
 def hourly_events(loaded,key,days,exclude_smb=False):

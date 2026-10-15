@@ -14,7 +14,11 @@ ROOT=Path(__file__).parents[1]
 
 
 def js_check(setup,files,checks):
-    result=subprocess.run(['node','-e',setup+'\n'+'\n'.join((ROOT/p).read_text() for p in files)+'\n'+checks],capture_output=True,text=True)
+    dependencies=''
+    if 'panel_view.js' in files and 'garmin_view.js' not in files:
+        source=(ROOT/'garmin_view.js').read_text(encoding='utf-8')
+        dependencies='const defaultGarminOptions=JSON.parse(JSON.stringify(garminOptions));'+source[source.index('function restoredGarminOptions'):source.index('const garminButtons')]
+    result=subprocess.run(['node','-e',('const workspaceGraphs=false;'+('const panelStates=new Map();' if 'panel_view.js' not in files else '')+setup)+'\n'+dependencies+'\n'+'\n'.join((ROOT/p).read_text(encoding='utf-8') for p in files)+'\n'+checks],capture_output=True,text=True)
     if result.returncode:raise AssertionError(result.stderr)
 
 
@@ -29,8 +33,8 @@ function render(){const v={data:[],layout:{meta:{insight:'activity_after',datase
 """
         checks="""
 let v=render(),curves=v.data.filter(t=>t.meta.kind==='insight_context');assert.deepEqual(curves.map(t=>t.y[0]),[2,20]);assert(curves.every(t=>t.opacity<.8&&t.meta.aggregation==='Median'));assert(curves.every(t=>t.y[2]===null));
-let bands=v.data.filter(t=>t.meta.kind==='insight_context_band');assert.equal(bands.length,4);assert(bands.every(t=>t.fill==='toself'));assert.deepEqual(bands.filter(t=>t.meta.dataset==='iob')[0].y,[1.5,2.5,6.5,5.5]);assert.equal(bands.filter(t=>t.meta.dataset==='iob')[1].x.length,4,'One-bin band has width and no gap bridging');
-assert.equal(v.layout.shapes.find(s=>s.name==='Insight glucose range').xref,'x domain');assert.deepEqual(v.layout.xaxis.domain,[0,.8]);assert(v.data.filter(t=>t.meta.kind==='insight_band').every(t=>t.fillcolor==='rgba(50,205,50,.18)'));assert.equal(v.data.find(t=>t.meta.kind==='insight_median').line.color,'#32cd32');
+let bands=v.data.filter(t=>t.meta.kind==='insight_context_band'&&t.meta.percentile==='25–75%');assert.equal(bands.length,4);assert(bands.every(t=>t.fill==='toself'));assert.deepEqual(bands.filter(t=>t.meta.dataset==='iob')[0].y,[1.5,2.5,6.5,5.5]);assert.equal(bands.filter(t=>t.meta.dataset==='iob')[1].x.length,4,'One-bin band has width and no gap bridging');
+assert.equal(v.layout.shapes.find(s=>s.name==='Insight glucose range').xref,'x domain');assert.deepEqual(v.layout.xaxis.domain,[0,.8]);assert(v.data.filter(t=>t.meta.kind==='insight_band'&&t.meta.percentile==='25–75%').every(t=>t.fillcolor==='rgba(50,205,50,.18)'));assert.equal(v.data.find(t=>t.meta.kind==='insight_median').line.color,'#32cd32');
 state.insight.aggregation='Average';v=render();curves=v.data.filter(t=>t.meta.kind==='insight_context');assert.deepEqual(curves.map(t=>t.y[0]),[4,40]);assert(curves.every(t=>t.name.startsWith('Average')));assert(v.layout.meta.insight_note.includes('IOB/COB averages'));
 state.insight.normalization='delta';v=render();assert.equal(v.data.find(t=>t.meta.kind==='insight_context'&&t.meta.dataset==='iob').y[0],4);assert(!v.layout.shapes.some(s=>s.name==='Insight glucose range'));
 state.insight.showIOB=false;state.insight.showCOB=false;state.insight.normalization='absolute';v=render();assert.deepEqual(v.layout.xaxis.domain,[0,1]);assert(!v.data.some(t=>t.meta.kind.startsWith('insight_context')));
@@ -101,9 +105,8 @@ assert.deepEqual(selectedDays,['2026-09-25','2026-09-26']);
             at=AppTest.from_file(str(ROOT/'app.py'),default_timeout=30).run();self.assertFalse(at.exception)
             ns=sample_data();at.session_state.ns_loaded=ns;at.session_state.ns_layers=['Glucose'];at.session_state.health_hidden_graphs=[dict(id=':glucose',base=':glucose',label='Glucose')]
             with patch('nightscout_ui.load_nightscout') as fetch,patch('garmin_ui.load_garmin') as read,patch('graph_view.render_graphs'):
-                at.radio(key='page').set_value('Data').run();self.assertFalse(at.exception)
-                at.selectbox(key='health_add_graph').select(':glucose').run();self.assertFalse(at.exception)
-                self.assertEqual(at.session_state.health_restore_graph,dict(id=':glucose',revision=1));self.assertEqual(at.session_state.health_hidden_graphs,[])
+                at.session_state.workspace_type='Data';at.run();self.assertFalse(at.exception)
+                self.assertFalse(any(w.key=='health_add_graph' for w in at.selectbox)) # Graph picker is local to the viewer now.
                 self.assertIs(at.session_state.ns_loaded,ns);fetch.assert_not_called();read.assert_not_called()
 
 if __name__=='__main__':unittest.main()

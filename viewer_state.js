@@ -1,38 +1,12 @@
-// Retain local graph navigation when Streamlit rebuilds an iframe after layer changes.
-const storageKey='profile-studio-view:'+navigation?.state_scope;
-const dateRequest=JSON.stringify([navigation?.selected,navigation?.mode,navigation?.date_revision]);
-let appliedRestoreRevision=0;
-function panelIdentity(index) {
-  const s=specs[index];if(s.layout.meta?.kind==='custom')return 'custom:'+s.layout.meta.custom_id;return s.layout.meta?.panel_id || sourceIdentity(s);
-}
-function viewerSettings() {
-  return {overlay:currentOverlay,sameScale,metric:currentMetric,showTargets,excludeSMB,eventScopes:{...eventScopes},
-    customPanels:[...dormantCustomPanels,...originalCustomStates().map(serializeCustom)],customVisible:originalCustomStates().map(s=>s.id),hourlyModes,
-    order:panelOrder.map(panelIdentity),panels:[...dormantPanelStates,...specs.map((spec,i)=>({...panelStateAt(i),...(spec.layout.meta?.kind==='custom'?{custom:serializeCustom(customState(spec.layout.meta.custom_id))}:{})}))],garmin:garminOptions};
-}
-function persistViewer() {
-  if(navigation?.report_render)return;
-  try {sessionStorage.setItem(storageKey,JSON.stringify({dateRequest,selectedDays,dateCycled,restoreRevision:appliedRestoreRevision,
-    configRevision:navigation?.config_revision,viewer:viewerSettings()}));} catch(_) { /* Browser storage may be disabled. */ }
-}
-function restoreViewer() {
-  let state=null;
-  try {if(!navigation?.report_render)state=JSON.parse(sessionStorage.getItem(storageKey));} catch(_) {}
-  appliedRestoreRevision=state?.restoreRevision || 0;
-  if(state?.dateRequest===dateRequest && state?.dateCycled && state.selectedDays?.length===1 && navigation?.days.includes(state.selectedDays[0])) {
-    selectedDays=state.selectedDays;dateCycled=true;
-  }
-  const incoming=navigation?.saved_config && (!state || state.configRevision!==navigation.config_revision);
-  const s=incoming?navigation.saved_config:state?.viewer;
-  if(!s || typeof s!=='object'){if(Array.isArray(navigation?.custom_ids))restoreCustomPanels([]);return;}
+function restoreGlobalViewerSettings(s){
   const overlayName={'Nightscout targets':'Temporary Targets','Temporary basal':'Temporary Basal','IOB + boluses':'IOB + Boluses','COB + carbs':'COB + Carbs','Variable sensitivity':'Variable Sensitivity'}[s.overlay] || s.overlay?.replace('Garmin · Workout ','Garmin · Activity ');
-  if(navigation?.overlays?.[overlayName])currentOverlay=overlayName;
+  currentOverlay=overlayName==='None' || !navigation?.overlays?.[overlayName]?'None':overlayName;
   sameScale=s.sameScale===true;
   restoreEventScopes(s);
   if(navigation?.profiles?.[s.metric])currentMetric=s.metric;
   showTargets=s.showTargets!==false;excludeSMB=s.excludeSMB===true;
-  for(const key of Object.keys(hourlyModes))if(['Average','Median'].includes(s.hourlyModes?.[key]))hourlyModes[key]=s.hourlyModes[key];
-  for(const key of Object.keys(garminOptions))if(typeof s.garmin?.[key]===typeof garminOptions[key])garminOptions[key]=s.garmin[key];
+  for(const key of Object.keys(hourlyModes))hourlyModes[key]=['Average','Median'].includes(s.hourlyModes?.[key])?s.hourlyModes[key]:'Average';
+  Object.assign(garminOptions,restoredGarminOptions(s.garmin || defaultGarminOptions));
   garminOptions.stressTau=Number.isFinite(garminOptions.stressTau)?Math.min(30,Math.max(1,garminOptions.stressTau)):5;
   garminOptions.aggregation=['Average','Median'].includes(garminOptions.aggregation)?garminOptions.aggregation:'Average';
   garminOptions.sleepFields=Array.isArray(garminOptions.sleepFields)?garminOptions.sleepFields.filter(k=>k in sleepFields):[];
@@ -43,6 +17,37 @@ function restoreViewer() {
       lower:Number.isFinite(raw.lower)?Math.max(0,raw.lower):0};
   }
   garminOptions.activity=activity;
+}
+// Retain local graph navigation when Streamlit rebuilds an iframe after layer changes.
+const storageKey='profile-studio-view:'+navigation?.state_scope;
+const dateRequest=JSON.stringify([navigation?.selected,navigation?.mode,navigation?.date_revision]);
+let appliedRestoreRevision=0;
+function panelIdentity(index) {
+  const s=specs[index];if(s.layout.meta?.kind==='custom')return 'custom:'+s.layout.meta.custom_id;return s.layout.meta?.panel_id || sourceIdentity(s);
+}
+function viewerSettings() {
+  return {workspaceVersion:2,overlay:currentOverlay,sameScale,metric:currentMetric,showTargets,excludeSMB,eventScopes:{...eventScopes},
+    customPanels:[...dormantCustomPanels,...originalCustomStates().map(serializeCustom)],customVisible:originalCustomStates().map(s=>s.id),hourlyModes,
+    order:panelOrder.map(panelIdentity),panels:[...dormantPanelStates,...specs.map((spec,i)=>({...panelStateAt(i),...(spec.layout.meta?.kind==='custom'?{custom:serializeCustom(customState(spec.layout.meta.custom_id))}:{})}))],garmin:garminOptions};
+}
+function persistViewer() {
+  if(navigation?.report_render)return;
+  try {sessionStorage.setItem(storageKey,JSON.stringify({dateRequest,selectedDays,dateCycled,dailyDate,restoreRevision:appliedRestoreRevision,
+    configRevision:navigation?.config_revision,viewer:viewerSettings()}));} catch(_) { /* Browser storage may be disabled. */ }
+}
+function restoreViewer() {
+  let state=null;
+  try {if(!navigation?.report_render)state=JSON.parse(sessionStorage.getItem(storageKey));} catch(_) {}
+  appliedRestoreRevision=state?.restoreRevision || 0;
+  if(navigation?.days?.includes(state?.dailyDate))dailyDate=state.dailyDate;
+  if(state?.dateRequest===dateRequest && state?.dateCycled && state.selectedDays?.length===1 && navigation?.days.includes(state.selectedDays[0])) {
+    selectedDays=state.selectedDays;dateCycled=true;
+  }
+  const incoming=navigation?.saved_config && (!state || state.configRevision!==navigation.config_revision);
+  const s=incoming?navigation.saved_config:state?.viewer;
+  if(!s || typeof s!=='object'){if(Array.isArray(navigation?.custom_ids))restoreCustomPanels([]);return;}
+  restoreGlobalViewerSettings(s);
+  const activity=garminOptions.activity;
   if(Array.isArray(s.customPanels))restoreCustomPanels(s.customPanels);
   else if(Array.isArray(s.custom)){
     const fieldOptions={};for(const [key,value] of Object.entries(activity))fieldOptions['garmin:'+key]={...value,axis:'unit'};
@@ -52,6 +57,7 @@ function restoreViewer() {
   else if(Array.isArray(navigation?.custom_ids))restoreCustomPanels([]);
   if(!Array.isArray(s.panels))for(const state of panelStates.values()){state.garmin=JSON.parse(JSON.stringify(garminOptions));state.hourly=hourlyModes[state.base.split(':').at(-1)] || 'Average';state.excludeSMB=excludeSMB;state.showTargets=showTargets;if(s.defaultMode)state.mode=s.defaultMode==='Multiple days'?'Multiple days':'Median + band';}
   restoreGraphPanels(s.panels);
+  if(workspaceGraphs && !s.workspaceVersion)for(const raw of s.panels || []){const state=panelStates.get(raw.id);if(state)state.graphType=raw.base?.startsWith('insight:')?'insight':raw.base?.startsWith('hourly:')?'summary':(s.defaultMode || navigation.mode)==='One day'?'daily':raw.mode==='Multiple days'?'overlay':'summary';}
   if(Array.isArray(s.order)) {
     const aliases={':Glucose':':glucose',':Temp basal':':basal',':Temp basal %':':basal_percent',':IOB & boluses':':iob',':Median IOB':':iob',':IOB':':iob',':COB & carbs':':cob',':Median COB':':cob',':COB':':cob',':Temp targets':':target','custom:Custom graph':'custom:custom-1'};
     aliases['insight:insight_site_after']='insight:insight_site_age';

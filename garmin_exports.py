@@ -175,9 +175,10 @@ def read_fit(path,mtime,size):
     return rows,sessions
 
 
-def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,zone,include_sleep=True,include_activity=True):
+def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,zone,include_sleep=True,include_activity=True,progress=None):
     notes=[]
     for day in (pd.date_range(start.tz_convert(zone).date(),end.tz_convert(zone).date()) if include_sleep else []):
+        if progress:progress('Sleep exports · '+str(day.date()))
         path=root/'Sleep'/f'sleep_{day.date()}.json'
         if not path.is_file():continue
         try:
@@ -191,6 +192,7 @@ def supplement_exports(root,data,activities,daily,inventory,warnings,start,end,z
         count=0
         for path in sorted(folder.rglob('*')):
             if not path.is_file() or path.suffix.lower()!='.fit':continue
+            if progress:progress('Activity FIT · '+path.name)
             file_ids=set(re.findall(r'(?<!\d)\d{5,}(?!\d)',path.stem))
             try:
                 stat=path.stat();signature=(str(path),stat.st_mtime_ns,stat.st_size)

@@ -23,13 +23,13 @@ class Health34Tests(unittest.TestCase):
         keys=['bolus','carbs','profile_percentage','site_changes','sensor_changes']
         loaded['recorded_profiles']=[dict(start='2026-09-16T00:00Z',end='2026-09-18T00:00Z',percentage=80)]
         figures=[json.loads(hourly_figure(loaded,key,days,False).to_json()) for key in keys]
-        setup="""const assert=require('assert'),garminOptions={},hourlyModes={},excludeSMB=false,currentOverlay='None',currentMetric='ic';
+        setup="""const workspaceGraphs=false;const assert=require('assert'),garminOptions={},hourlyModes={},excludeSMB=false,currentOverlay='None',currentMetric='ic';
 const specs="""+json.dumps(figures)+";\n"
         checks="""
 for(let i=0;i<specs.length;i++){
  const state=ensurePanelState(specs[i]);assert.equal(state.showDailyGrid,false);
  const original=JSON.stringify(specs[i]),v=JSON.parse(original),barsBefore=JSON.stringify(v.data.find(t=>t.meta.kind==='hourly_histogram'));
- applyHourlyGrid(v,i);assert.equal(v.data[0].visible,false);assert.equal(v.data[0].showscale,false);assert.equal(v.layout.yaxis.visible,false);assert.deepEqual(v.layout.yaxis2.domain,[0,1]);assert.equal(v.layout.height,280);
+ applyHourlyGrid(v,i);assert.equal(v.data[0].visible,false);assert.equal(v.data[0].showscale,false);assert.equal(v.layout.yaxis.visible,false);assert.deepEqual(v.layout.yaxis2.domain,[0,1]);assert.equal(v.layout.height,190);
  assert.equal(JSON.stringify(v.data.find(t=>t.meta.kind==='hourly_histogram')),barsBefore);
  assert.deepEqual(v.data[0].z,specs[i].data[0].z);assert.equal(JSON.stringify(specs[i]),original);
  state.showDailyGrid=true;const shown=JSON.parse(original);applyHourlyGrid(shown,i);assert.equal(shown.data[0].visible,true);assert.notDeepEqual(shown.layout.yaxis2.domain,[0,1]);assert.equal(shown.layout.height,specs[i].layout.height);
@@ -52,13 +52,13 @@ for(let i=0;i<specs.length;i++){
             at.session_state.ns_loaded=ns;at.session_state.garmin_loaded=garmin
             at.session_state.ns_layers=['Glucose'];at.session_state.editor_tab='I:C'
             with patch('nightscout_ui.load_nightscout') as fetch,patch('garmin_ui.load_garmin') as read,patch('garmin_ui.merge_sources',wraps=merge_sources) as merge,patch('graph_view.render_graphs'):
-                at.radio(key='page').set_value('Data').run();self.assertFalse(at.exception)
+                at.session_state.workspace_type='Data';at.run();self.assertFalse(at.exception)
                 combined=at.session_state._combined_health[1]
                 combined['_chart_cache']['navigation_sentinel']={'keep':True}
                 draft=deepcopy(at.session_state.draft)
                 for page in ('Editor','Data','Editor'):
                     at.session_state.editor_tab='I:C'
-                    at.radio(key='page').set_value(page).run();self.assertFalse(at.exception)
+                    at.session_state.workspace_type='Data' if page=='Data' else 'Profile';at.session_state.page='Editor';at.run();self.assertFalse(at.exception)
                     self.assertIs(at.session_state.ns_loaded,ns);self.assertIs(at.session_state.garmin_loaded,garmin)
                     self.assertIs(at.session_state._combined_health[1],combined)
                     self.assertEqual(combined['_chart_cache']['navigation_sentinel'],{'keep':True})

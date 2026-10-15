@@ -1,5 +1,176 @@
 # Profile Studio
 
+## Health-51: profile steps and reliable report-block ordering
+
+Replace all included application files, including JavaScript and `graph_component/`, then restart Streamlit. Check **Build: Health-51**. Keep your data and saved configuration folders.
+
+Nightscout profile values in custom graphs now use connected vertical step changes at schedule boundaries, matching the profile editor, with a very light metric-coloured shade. Actual gaps and daylight-saving discontinuities remain unconnected. Multiple-day profiles retain a distinct colour for every date.
+
+Move up and down now reorder the visible graphs inside the active Export report block. Daily, Summary and Insights graphs each have their own ordering, and boundary arrows disable correctly. The regular Data workspace continues to order all active graph cards.
+
+## Health-50: independent imports, custom graphs, sleep controls and saved-settings removal
+
+Replace all included application files, including JavaScript and `graph_component/`, and restart Streamlit. Check **Build: Health-50**. Keep your data, `graph_configurations/`, `report_configurations/`, `.streamlit/` and `.venv/` folders. No new dependencies.
+
+- Nightscout and Garmin load independently in the background, with separate progress and errors. Starting the other source or changing an app control no longer interrupts the first import. Previously loaded data stays available if a new import fails.
+- Activity-fitted graphs use time labels suited to their actual window, including short individual activities and PDF exports.
+- Custom graphs always list **Nightscout I:C, ISF, Basal and Target** under Profiles in Data and Export. These use the recorded effective Nightscout profile, including its timezone and already-applied adjustments. Missing history stays missing. Older draft/reference profile selections migrate to the matching Nightscout metric.
+- Multiple-day overlays use a distinct color per date, consistently across graphs and PDFs. Field names and line styles distinguish layers within a date.
+- Custom graphs include Summary layers for profile percentage, site changes and sensor changes. These can be combined in Export Summary. Each layer also has a **Vertical offset (%)** control that adds display space to move it up or down without changing recorded values, labels or hover details. Settings restore with graph and PDF presets.
+- Sleep reads from oldest at the top to newest at the bottom. Sleep signal selectors and **Underneath / Overlay** controls are available in standard/custom sleep graphs and the Insight **Nights · sleep + glucose** view, including Export. Unavailable signals remain visible but disabled. Values keep their actual units and gaps. Insight PDF continuations preserve night order and selected signal rows.
+- Remove a graph configuration under **Saved graph configurations → Manage saved graph configurations → Delete graph configuration**. Remove a PDF preset with **Delete PDF preset** beside the saved PDF selector. Removing settings leaves the current graphs/data open. Deleted files remain recoverable in the corresponding configuration folder's `.trash/` subfolder.
+- Multiple saved custom graphs restore to separate panels. The integrated PDF settings, saved-preset generation, date validation and **Use loaded dates** repair from Health-49 are included.
+
+Validation uses synthetic data: 64 regression tests, live concurrent-source and PDF save/load/delete workflows, browser checks for custom/summary/sleep graphs, and rendered portrait/landscape PDFs at multiple graph densities. No personal accounts or saved user settings were used for these checks.
+
+
+## Health-49: integrated PDF controls and reliable preset exports
+
+Replace all included application files, including JavaScript and `graph_component/`, and restart Streamlit. Check **Build: Health-49**. Keep your data, saved graph/report configurations, `.streamlit/` and `.venv/` folders. No new dependencies.
+
+The PDF workspace now groups the saved preset, preset name, Save PDF settings, Make PDF and settings editor in one responsive panel. The floating export box and clipped settings area are removed.
+
+**Fix an older preset with unavailable dates:** load the preset, select **Use loaded dates**, then **Save PDF settings**. Make PDF now uses that saved preset with the dates currently loaded in the app. This date policy is saved, so the preset works when a new data range is loaded. Use **Report dates → Use specific dates** when the preset should retain fixed dates. Existing fixed dates are preserved; unavailable dates are shown before export and must be repaired or loaded.
+
+- Make PDF uses the saved preset. Unsaved layout, date or graph changes are clearly marked and must be saved first. Pending saves/exports prevent duplicate requests, and success or failure appears beside the controls.
+- Switching presets restores global settings as well as individual graph controls, without carrying settings from the previously loaded preset. Older presets without dates use loaded dates.
+- Invalid dates and daily windows are rejected before a preset is overwritten. A damaged preset is identified without preventing the other presets from loading.
+- Empty reports provide an actionable error. A failed new export clears the previous preview, and successful previews identify the preset and date range used.
+
+Validation: 54 regression tests passed. A live Streamlit/Chromium check reproduced the out-of-range preset, repaired and saved it, generated its PDF preview, saved graph edits, switched presets, and checked wide/narrow layouts. Portrait and landscape report rendering and custom graph checks use synthetic data.
+
+## Health-48: PDF presets, compact exports and individual activity windows
+
+Replace **all included application files**, including JavaScript and `graph_component/`, then restart Streamlit. Check **Build: Health-48** in the sidebar. Keep your existing `data/`, `graph_configurations/`, `report_configurations/`, `.streamlit/`, and `.venv/` folders. No new dependencies. The included Excel import template only needs copying if it is missing from your installation.
+
+- **PDF layout:** Sleep uses a smaller vertical allocation, including compact underneath metrics. Glucose Compact retains twice the standard graph allocation. Page headings use the report type and date. Automation notes are consolidated once at the bottom of each day's graphs. Profile labels have separate space above the legend.
+- **Matching exports:** Download HTML saves the completed preview layout. Preview, saved HTML and print use the same dimensions, independently of browser-window width. Print at 100% on the selected A4 orientation with browser headers and footers disabled.
+- **Saved PDF settings:** Choose a saved preset and use **Make PDF**. Use **Edit PDF settings**, then **Save PDF settings** before exporting changes. Dates, orientation, block order, per-block graph counts, selected layers and graph controls are saved together. Temporarily unavailable blocks stay in the preset when changing the date range. Older partial Garmin settings receive independent defaults. Exporting hourly-only graphs no longer tries to update an absent primary Plotly axis.
+- **Custom graph controls:** Layer-specific settings include activity speed/pace (km/h or min/km for metric data), smoothing and cutoffs, stress style, sleep distribution, steps/bolus statistics, SMB visibility and carb amount labels. Controls restore with saved graph and PDF configurations.
+- **Fit an individual graph to activities:** Enable **Fit to activities** in that graph's settings. The daily graph and its PDF export use the start of the first activity through the end of the last activity. Other graphs keep their own time window. Dates with no recorded activities retain the chosen report/day window.
+
+Validation: **48 regression tests passed**. Chromium checks cover custom layer controls, saved/restored settings, individual activity windows, saved PDF generation and hourly-only reports. Portrait/landscape exports at four and six graphs per page have matching preview, saved HTML and print dimensions. Rendered PDFs were visually checked with synthetic data.
+
+## Health-47: double-height Glucose Compact in reports
+
+Replace all included files, restart Streamlit and check **Build: Health-47**. Preserve your data, saved configurations and `.venv/`. No new dependencies.
+
+Glucose Compact now receives **twice the vertical allocation** of a standard graph in PDF/HTML reports. The selected graphs-per-page count still counts actual graphs: six graphs with one Compact use height weights **2:1:1:1:1:1**. The standard allocation is calculated consistently across the export, including days with missing plots, and complete graphs are resized without cropping. At one graph per page, Compact can use the full available body; standard graphs use half that allocation when the same export includes Compact. Interactive graph sizing is unchanged.
+
+## Health-46: individual sleep + glucose nights
+
+Replace **all included files**, including JavaScript and `graph_component/`, restart Streamlit and check **Build: Health-46**. Preserve data, examples, saved graph/report configurations and `.venv/`. No new dependencies.
+
+In **Sleep–glucose → Settings → Nights · sleep + glucose**, each recorded sleep session has its own row, aligned by local clock time. Stages use the existing Garmin colors, with lighter shading after the recorded wake time. Actual glucose is drawn above the shading, with shared 0–20 mmol/L axes (extended for higher values), red excursions outside 4–10, and an optional fitted scale shared across all selected nights.
+
+- **After waking**: 0–12 hours in 30-minute increments, initially 4 hours. The window stops at the next sleep or loaded-data end. Choosing a wake date includes the loaded previous evening. Missing glucose intervals longer than 10 minutes remain gaps; no values are invented.
+- Browse seven nights at a time with **Newer nights / Older nights**. The current view, page and slider are retained in graph configurations. Existing During sleep, After waking and Sleep → next-day glucose views remain available.
+- PDF/HTML use the same renderer, include every selected night, and split long lists into continuation panels. The selected graphs-per-page count still controls the page layout. Fewer panels per page allow more nights per panel. Each panel includes a concise settings-aware method note.
+- Hover gives original glucose, local time and UTC offset. Fall-back clock hours break the glucose curve instead of drawing backwards; stage intervals crossing offset changes are split. Unknown sleep stages remain unknown. Post-wake shading does not claim confirmed wakefulness.
+- Restored panel controls follow their current graph identity, preventing stale/blank controls when a saved panel is rebound to its data source.
+
+Validation: **43 tests passed**. Chromium checks cover slider changes, seven-night paging, switching back to existing insights, saved-setting restoration and complete 12-night reports at four/six panels per page. App and PDF layouts were visually checked using synthetic data; no live accounts were accessed.
+
+## Health-45: compact Sleep and fixed report density
+
+Replace **all included files**, including JavaScript and `graph_component/`, restart Streamlit and check **Build: Health-45**. Preserve data, examples, saved graph/report configurations and `.venv/`. No new dependencies.
+
+- Sleep reserves less stage whitespace and uses 65-pixel underneath signal rows. Daily stage bars remain prominent; labels, selected signals, hover and both Overlay/Underneath modes remain available. Underneath metrics have compact horizontal names and short unit axes, preventing long vertical titles from overlapping adjacent rows.
+- **Graphs per page is now enforced**, including Sleep and Compact. Each meaningful graph uses one slot. Four-per-page produces larger slots than six. Complex charts are laid out with sufficient internal room, then their complete vector graphic is compressed vertically into the fixed output slot. Data, text, connectors and legends resize together; graphs are not cropped. Day/block boundaries and a final partially filled page remain possible. Empty graphs are still omitted.
+- Printed automation-note labels share the nearby-first, downward-only placement routine used by Compact carb/bolus amounts. Close notes use stacked labels and subtle vertical leaders. Repeated identical notes at the same clock time share printed text. If a fixed slot is exceptionally crowded, complete notes appear in a small timestamped key underneath that graph. Event visibility still comes from the shared graph settings; timestamps and dated markers are unchanged.
+- Unicode/emoji text is retained in notes and exports, with standard emoji font fallbacks. Actual glyph/color support depends on the browser and installed fonts on the exporting computer.
+
+Validation: **34 regression tests passed**. Real Chromium checks use synthetic data for daily Sleep, summary Sleep, optional underneath/overlaid signals, crowded automation notes, Unicode text and mixed pages at four/six graphs per page. PDF layouts were rendered and visually checked. Live Nightscout/Garmin accounts were not accessed.
+
+## Health-44: consistent event labels and PDF sizing
+
+Replace **all included files**, including JavaScript and `graph_component/`, then restart Streamlit and check **Build: Health-44**. Preserve your data, saved graph/report configurations, examples and `.venv/`. No new dependencies.
+
+- Custom Graph settings and event controls use separate, responsive columns. Expanded event selectors stay inside their box, and the status text sits with Settings.
+- Profile-switch annotations consistently show **Profile Name · %** together below the plot. Nearby switches stack vertically. Coincident identical labels across dates share one annotation; dated events and percentage intervals are retained.
+- PDF automation notes use the same event visibility settings and renderer as interactive graphs. Reports add compact note text so it remains readable without hover. Reapplying a reserved note strip does not repeatedly shrink the graph.
+- Simple PDF graphs use one shared height for the selected orientation and graphs-per-page setting across daily pages. Six simple graphs fit on a page; titles, ticks, legends and margins become compact. The graphical profile overview follows the same slot sizing. Sleep, Compact and dense/stacked graphs reserve extra space deterministically. Compact is shorter in reports, and maximum event-label space is reserved consistently across days.
+- Time graphs share the same physical X-axis margins in reports, so identical times align across Compact, profile and recorded-data plots. Local-time conversion remains shared with the interactive graphs; no timestamps are shifted to compensate for layout. Legends stay inside the exported SVG rather than being cut off below it.
+
+Validation: **33 regression tests passed**. Real Chromium checks cover Custom controls at wide/narrow widths, combined switch labels, automation text, four-day portrait/landscape reports with six identical-height simple graphs per page, aligned axis bounds, graphical profile overview, Compact and daily/summary Sleep with HRV overlays. Rendered reports were visually inspected. Checks use synthetic data; live Nightscout/Garmin accounts were not accessed.
+
+## Health-43: downward carb labels in Glucose Compact
+
+Replace **all included files**, then restart Streamlit and check **Build: Health-43**. Preserve your data, saved configurations and `.venv/`. No new dependencies.
+
+Crowded compact carb amounts now use the same placement routine as manual boluses. Amounts stay near their markers when space is available. Otherwise labels extend vertically downward, with a small rightward offset only if the vertical column is occupied; the old sideways/leftward search has been removed. Collision checks, marker positions, exact hover amounts and the Amount labels setting are retained. Exceptionally dense labels that cannot fit remain available on hover. The shared renderer applies this to app graphs and report graphs.
+
+Validation: four focused checks passed, covering downward leaders, event lanes, visibility and existing configuration access. Chromium checks passed with crowded carb entries at wide/narrow widths and through the report renderer; the rendered layouts were inspected using synthetic data.
+
+## Health-42: ordered PDF report blocks and historical profile graphs
+
+Replace **all included files**, including JavaScript and `graph_component/`, then restart Streamlit. Preserve your `data/`, `examples/`, `graph_configurations/`, `report_configurations/` and `.venv/` folders. Check **Build: Health-42**. No new dependencies.
+
+- **Data → Export → Report blocks** has Available components and PDF order. Add, remove and move blocks up/down; each high-level block can appear once. The right-hand order is the output order. Overview, Base profiles, Graphical profile overview, Daily statistics and Glucose distribution remain independent blocks.
+- Use **Configure** or the Daily / Summary / Insight tabs to edit the graphs inside each block. Existing graph actions, settings, overlays and Custom Graph construction remain available. Summary graphs retain their individual Median, Average or Multiple-day modes, including combined COB + Carbs and IOB + Boluses. Graph blocks and graphical profiles have independent graphs-per-page settings; page orientation applies to the report. Summary blocks are excluded for a single selected day.
+- **Graphical profile overview** draws I:C, ISF, basal and target schedules from historical Nightscout base profiles, not the editor's draft/reference profiles. Numeric formatting, repeated identical schedule entries and unrelated metadata do not create duplicate base profiles. Percentage states stay grouped. A repeated name with different base schedules receives an explicit schedule-variant label. Missing base schedules are not reconstructed by guessing; unspecified glucose units are labelled as such.
+- Reports distinguish the **report/data timezone** from the **recorded profile timezone**. Historical timezones remain unchanged, and profile graphs show stored schedule clock times. The base-profile tables and graphical overview use the same grouping rules.
+- Saved PDF settings retain block order, per-block graph settings and page counts, graph selections, overlays and the existing report options. Earlier PDF presets migrate to report blocks. Interactive graph presets remain separate.
+- Page layout now measures the actual header, footer, body and note space. Complex graphs use additional slots, tables split with repeated headers, and long sleep timelines split across pages. Graphs resize instead of being cropped. Six graphs per page is a maximum: complex plots may need fewer. A final layout error identifies the actual component if it cannot fit. Graph-block titles describe their selected contents.
+- Historical target reconstruction now uses schedule/profile/temporary-target boundaries and timezone-offset transitions instead of generating every minute of long date ranges. Snapshot-owned caches reuse derived summaries; report generation restricts datasets and Custom fields to selected graphs. Deleted graph templates are not initially rendered. Adding or styling graphs does not reload source data.
+
+Validation: **51 focused regression tests passed**, including block/preset migration, schedule grouping, unit handling, selective Custom exports, mixed summary modes, DST boundaries and a year-long target schedule. Real Chromium checks cover the report builder and existing graph interactions. Portrait/landscape reports, dense Insight pages, sleep overlays and a 366-day statistics report were rendered and inspected. Checks use synthetic records; live Nightscout/Garmin accounts were not accessed.
+
+## Health-41: compact annotations and tighter Custom Graph controls
+
+Replace **all included files**, including JavaScript and `graph_component/`, then restart Streamlit. Preserve your `data/`, `examples/`, graph/report configuration folders and `.venv/`. Check **Build: Health-41**. No new dependencies.
+
+- Compact site, sensor and profile-switch text shares width-aware rows below temp basal. Nearby events stack together; their lines remain in the graph, outside the TIR/insulin bars. Layout is recalculated for zoom, resizing and HTML/PDF export.
+- Bolus amounts appear close to their markers without a leader when space permits. Displaced labels use vertical downward leaders, with a small downward/right offset only when the vertical positions are crowded. Free lower annotation space is usable without covering event text, time labels or the footer. Exceptionally crowded labels can still be omitted; exact amounts remain on hover.
+- **Amount labels: on/off** in the compact graph's Settings controls permanent carb and manual-bolus text only. Markers, sizes and hover details remain. It defaults to on, is independent for each graph, and is retained in saved configurations, duplicates and reports. Other graphs are unchanged.
+- **Saved graph configurations** now appears immediately below the sidebar **+ Add graph**, including before data has been loaded. Loading a configuration does not fetch source data.
+- Custom Graph settings use more horizontal space and tighter rows. Each selected layer has a **×** remove button alongside its name, available even with the Data Layers selector closed. Removing a layer preserves all other selections, axis limits and filters; the layer can be added again through Data Layers.
+
+Validation: **42 focused regression tests passed**, plus real Chromium checks for mixed event rows, narrow layouts, downward leaders, label visibility, independent duplicates, saved settings, removal/re-addition and retained Custom Graph settings. Portrait and landscape HTML/PDF output was rendered and visually checked. Validation uses synthetic records; no live account data was accessed.
+
+## Health-40: compact layout and Custom Data Layers
+
+Replace **all included files**, including JavaScript and `graph_component/`, then restart Streamlit. Keep your `data/`, `examples/`, graph/report configuration folders and `.venv/`. Check **Build: Health-40**. No new dependencies.
+
+- Compact activity, site/sensor, profile-switch and percentage overlays stop at the actual timeline area. They no longer extend through the summary bars. Profile names and percentages use width-aware vertical lanes below basal, above the summary and legend; the same layout is used in HTML/PDF and recalculated on resize.
+- TIR values appear inside the TIR bar. A blue basal-share bar contains basal/bolus amounts and percentages. A single small line retains the estimated daily TDD, CGM coverage and daily-total context. Basal/TDD remain estimates, with incomplete coverage explicitly retained.
+- SMB markers sit 0.85 mmol/L (15.3 mg/dL) above their matched glucose value, with a subtle connector. Markers still require a nearby recorded glucose sample. Glucose renders above IOB/COB.
+- Bolus/carb markers keep their actual timestamps and amounts. Amount labels are repositioned with small leader lines to avoid nearby labels and glucose/SMB points. For exceptionally dense clusters, labels that cannot fit are omitted; individual markers and exact hover amounts remain. Identical timestamps/amounts can still share a marker position.
+- Daily glucose connecting lines now use red below 4, green from 4 through 10, and orange above 10 mmol/L, matching the points. Transitions are split at the thresholds and recorded gaps remain gaps. This applies to the compact graph, regular glucose and Custom graphs.
+- Custom graphs have a searchable **Data Layers** section within Settings, with selected counts and existing data/reference colors. It lists all supported Nightscout and Garmin signals, including activity and sleep metrics; a field without loaded records remains selectable and is identified on hover. Profile settings are available when the profile workspace supplies them. Activity and other event annotations remain under Overlays.
+- Fixed Custom data-selection redraws that incorrectly displayed summary traces in a graph labelled Daily. Selecting fields, filtering and changing axes now preserve that panel's date/mode. No additional source loading is triggered.
+
+Validation: **39 focused regression tests passed**, plus real Chromium checks for event clipping, profile-label lanes, threshold colors, dose labels, Custom daily selection and re-adding data, saved settings and narrow layouts. Portrait and landscape HTML/PDF reports were rendered and visually checked. Tests use synthetic data; live account records were not accessed. An archival Custom-layer migration test targets the removed sidebar controls and is excluded from the current workspace suite.
+
+## Health-39: compact overview, combined summaries and clearer controls
+
+Replace **all included files**, including the JavaScript files and `graph_component/`, then restart Streamlit. Preserve `data/`, `examples/`, `graph_configurations/`, `report_configurations/` and `.venv/`. Check **Build: Health-39**. No new dependencies.
+
+- **Glucose Compact** now draws glucose above IOB/COB, including low readings. SMB triangles sit just above a nearby glucose reading with a short connector. Carb and user-bolus marker sizes scale with their recorded amounts, within minimum/maximum sizes. IOB, COB and basal have more room; the daily distribution and insulin totals have a clearer footer. Hover still uses actual U/g values. Automatic inset scales remain separate from glucose; estimated totals and missing-data behavior are unchanged.
+- **COB + Carbs** and **IOB + Boluses** each have one Summary entry. Choose Median, Average or Multiple-day overlay for the timeline, and Timeline + hourly bars, Timeline only or Hourly bars for content. Hourly bars retain their independent, explicitly labelled Average/Median setting, daily-grid toggle and Exclude SMB option. Existing saved graph instances remain usable.
+- The sidebar order is **Workspace → + Add graph → Recorded data to display → Load data settings → Loading status**. Add graph opens a searchable popup with color-accented Daily, Summary, Insights and Custom choices. The same control is available inside expanded view. Adding, deleting and duplicating graphs does not fetch source data. Empty workspaces shrink to a small prompt.
+- Graph controls distinguish **Graph actions**, **Settings** and **Overlays**. Export controls are grouped into report dates, page layout, section choices, overview measures and generation/saved settings.
+- Nightscout/Garmin imports, graph preparation and report generation show progress as real stages, date batches, files or graph counts complete. Browser progress appears only for work taking longer than a brief delay. No estimated completion time is invented. Data loading remains manual.
+
+Validation: **51 focused Python/JavaScript regression checks passed**, plus real Chromium tests for compact layering, SMB connectors and dose scaling, combined summary modes and grids, daily navigation, Custom graphs, configuration reload, the sidebar-to-popup bridge and the export controls. Portrait and landscape HTML/PDF reports were rendered and visually checked. Checks use synthetic records and local fixture databases; live Nightscout/Garmin accounts were not exercised. Four archival Garmin UI tests still target earlier controls/browser stubs and are not part of the current workspace validation suite.
+
+## Health-38: independent graph workspaces and Glucose Compact
+
+Replace **all included files**, including `.js` files and `graph_component/`, then restart Streamlit. Keep your `data/`, `examples/`, `graph_configurations/`, `report_configurations/` and `.venv/` folders. Check **Build: Health-38**. No new dependencies.
+
+- **Profile → View / Compare / Edit** keeps the profile workflows together. **Data → View Data / Export** has separate viewing and report workspaces. Loaded source data is reused when switching between them.
+- **Data to load** chooses source records, independently of graph visibility. Load dates and refresh remain manual. Adding/deleting graphs or loading a graph configuration does not fetch Nightscout or Garmin data.
+- Use **+ Add graph** below the graph area. Search the **Daily**, **Summary**, and **Insights** tiles. Add as many independent instances as needed, including multiple Custom graphs. Delete, duplicate and reorder them locally; a deleted graph remains available in the picker. Missing data is identified rather than fetched automatically.
+- Daily, multiple-day overlay, summary and Insight graphs can coexist. Previous/Next changes daily panels only; summaries and Insights keep the selected period. New workspaces start empty. Existing saved graph configurations with panel settings migrate; an older configuration without panel definitions may need its graphs added once and resaved.
+- Each graph has a closed **Events · N active** box: **Use global / Show / Hide** for activity, site changes, sensor changes, profile switches, profile percentages and automation notes. Global defaults remain available. Clock-time events are deliberately excluded from elapsed-time Insights and non-time plots.
+- **Glucose Compact — Daily** combines glucose, targets, IOB/user boluses at the bottom, downward-growing COB/carbs at the top, and SMB markers touching the glucose curve. The U and g inset scales automatically fit that day's data; they are independent of the glucose axis. Hover retains actual units. A narrow basal panel compares the historical schedule with reconstruction from absolute temporary-basal records. The footer shows the daily range distribution, coverage, estimated basal/TDD and basal/bolus split.
+- Compact totals are explicitly **daily** even if the time axis is zoomed or cropped. Basal and TDD are **estimates**, not pump-confirmed delivery. Missing schedule/treatment coverage and percentage-only temporary basal intervals are reported as incomplete; they are not silently replaced with zero. Current-day values are totals so far. SMBs without a nearby glucose reading have no invented glucose position.
+- Summary and Insight **Bands** offer **25–75%**, **10–90%**, **Both**, or **None**. The outer band is lighter. Quantiles use the same per-day/per-event contributions as the curve, break at missing data and require at least two contributors. They describe variation, not statistical confidence. Glucose/IOB/COB continuous summaries can select Average or Median; the statistic is named separately from hourly bar controls.
+- Simple distributions are shorter in both the app and reports. Multi-metric/compact timelines reserve additional report space when needed. Six graphs per page remains the maximum, not a promise to squeeze six complex timelines into unreadable plots.
+- **Export** owns its graph templates and saved PDF settings. Select overview measures, daily templates and summary/overlay sections; saved export configurations retain those graph instances, event overrides, bands and settings. View Data configurations remain separate. Portrait and landscape output share the interactive graph renderer.
+
+Validation: 26 focused Python/JavaScript regression checks passed, plus real Chromium checks for mixed graph modes, independent events, add/delete/re-add, saved settings and separate export workspaces. Portrait and landscape HTML/PDF reports were rendered and visually checked. Tests use synthetic data; no live Nightscout or Garmin account was exercised. Archived tests for earlier sidebar controls are not the validation suite for the new workspace.
+
 ## Health-37: individual graph restoration and consistent event/Insight overlays
 
 **+ Add graph** in Data layers lists deleted base graphs and restores one with its existing settings. If its layer was deselected, selecting it again also enables that layer. This replaces the toolbar restore-all button. Restoration does not reload Nightscout/Garmin or recreate an unchanged graph iframe, so the current time window remains intact. Duplicate copies are permanently removed when deleted; create another with Duplicate when needed.

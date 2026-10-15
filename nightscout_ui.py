@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import streamlit as st
 
 from nightscout import NightscoutError, load_nightscout
-from view_config import configuration_controls
+from source_loading import start_load, loading, loading_status, collect_loads
 from date_controls import day_calendar
 from garmin_ui import source_controls, source_inputs, combined_snapshot
 from garmin_data import GARMIN_LAYERS, SLEEP_OVERLAYS
@@ -51,112 +51,86 @@ def select_imported_layers(snapshot,requested):
     st.session_state.ns_layers=list(dict.fromkeys(current+imported_layers(snapshot,requested)))
 
 
-def sidebar_controls(profile_zone):
+def sidebar_controls(profile_zone, display_slot=None, data_workspace=False):
+    collect_loads()
     try:ZoneInfo(profile_zone)
     except (ValueError,ZoneInfoNotFoundError):
         st.info('Enter a valid display/profile timezone before loading data.');return None
-    today=datetime.now(ZoneInfo(profile_zone)).date()
-    # Submit dates and both connection sections as one snapshot. Typing alone never reloads.
-    with st.form('health_sources',enter_to_submit=False):
-        st.markdown('**Load dates**')
-        left,right=st.columns(2)
-        first=left.date_input('From',today-timedelta(days=6),key='ns_from')
-        last=right.date_input('Through',today,key='ns_until')
-        refresh_all=st.form_submit_button('Refresh all data',key='health_refresh_all',help='Submit these dates and connection details, then read both configured sources once.')
-        with st.expander('Nightscout data'):
-            url=st.text_input('Nightscout URL',value=os.environ.get('NIGHTSCOUT_URL',''),placeholder='https://your-nightscout.example',key='ns_url')
-            token=st.text_input('Access token',value=os.environ.get('NIGHTSCOUT_TOKEN',''),type='password',key='ns_token')
-            ns_selection=import_selection('Import',NS_IMPORTS,'ns_load_layers')
-            load=st.form_submit_button('Load / refresh data',key='ns_refresh')
-        with st.expander('GarminDB data'):
-            garmin_selection=import_selection('Import',GARMIN_IMPORTS,'garmin_load_layers')
-            garmin_inputs=source_inputs(profile_zone,st.form_submit_button)
-    if load or (refresh_all and url.strip()):
-        try:
-            with st.spinner('Loading Nightscout records…'):
-                collections=sorted(set().union(*(NS_IMPORTS[k] for k in ns_selection)))
-                snapshot=load_nightscout(url,token,first,last,profile_zone,**({'categories':collections} if set(collections)!={'glucose','treatments','loop'} else {}))
-            st.session_state.ns_loaded=snapshot
-            select_imported_layers(snapshot,ns_selection)
-        except (NightscoutError, ValueError, ZoneInfoNotFoundError) as exc:
-            st.error('Nightscout load failed: '+str(exc))
-            if st.session_state.get('ns_loaded') is not None:st.caption('Previously loaded Nightscout data is still displayed.')
-    ns_loaded=st.session_state.get('ns_loaded')
-    if ns_loaded is not None:
-        st.caption(f"Nightscout loaded: {ns_loaded['first']}–{ns_loaded['last']} · {ns_loaded['zone']}")
-        if st.button('Clear loaded Nightscout data'):
-            del st.session_state.ns_loaded
-            st.rerun()
-    previous_garmin=st.session_state.get('garmin_loaded')
-    garmin=source_controls(profile_zone,first,last,refresh_all=refresh_all,inputs=garmin_inputs,categories=[GARMIN_IMPORTS[k] for k in garmin_selection] if len(garmin_selection)!=len(GARMIN_IMPORTS) else None)
-    if garmin is not None and garmin is not previous_garmin:select_imported_layers(garmin,garmin_selection)
-    if refresh_all and not url.strip() and not garmin_inputs[0].strip():
-        st.info('Enter a Nightscout URL or Garmin folder before refreshing.')
+    display_slot=display_slot if display_slot is not None else st.container()
+    with st.expander('Load data settings',expanded=not (st.session_state.get('ns_loaded') or st.session_state.get('garmin_loaded'))):
+        if data_workspace:
+            profile_zone=st.text_input('Display timezone',value=profile_zone,key='health_timezone')
+            st.selectbox('Glucose units',['mmol/L','mg/dL'],key='health_glucose_unit')
+            try:ZoneInfo(profile_zone)
+            except (ValueError,ZoneInfoNotFoundError):st.error('Enter a valid display timezone.');return None
+        today=datetime.now(ZoneInfo(profile_zone)).date()
+        # Submit dates and both connection sections as one snapshot. Typing alone never reloads.
+        with st.form('health_sources',enter_to_submit=False):
+            st.markdown('**Data to load**')
+            ns_selection=import_selection('Diabetes',NS_IMPORTS,'ns_load_layers')
+            garmin_selection=import_selection('Garmin',GARMIN_IMPORTS,'garmin_load_layers')
+            st.markdown('**Load dates**')
+            left,right=st.columns(2)
+            first=left.date_input('From',today-timedelta(days=6),key='ns_from')
+            last=right.date_input('Through',today,key='ns_until')
+            refresh_all=st.form_submit_button('Refresh all data',key='health_refresh_all',help='Start both configured sources together. An import already running continues independently.')
+            with st.expander('Nightscout data'):
+                url=st.text_input('Nightscout URL',value=os.environ.get('NIGHTSCOUT_URL',''),placeholder='https://your-nightscout.example',key='ns_url')
+                token=st.text_input('Access token',value=os.environ.get('NIGHTSCOUT_TOKEN',''),type='password',key='ns_token')
+                load=st.form_submit_button('Load / refresh data',key='ns_refresh',disabled=loading('nightscout'))
+            with st.expander('GarminDB data'):
+                garmin_inputs=source_inputs(profile_zone,st.form_submit_button)
+    status_slot=st.expander('Loading status',expanded=bool(load or refresh_all or garmin_inputs[2] or loading('nightscout') or loading('garmin')))
+    with status_slot:
+        if load or (refresh_all and url.strip()):
+            collections=sorted(set().union(*(NS_IMPORTS[k] for k in ns_selection)))
+            start_load('nightscout',load_nightscout,url,token,first,last,profile_zone,**({'categories':collections} if set(collections)!={'glucose','treatments','loop'} else {}))
+        ns_loaded=st.session_state.get('ns_loaded')
+        if ns_loaded is not None:
+            st.caption(f"Nightscout loaded: {ns_loaded['first']}–{ns_loaded['last']} · {ns_loaded['zone']}")
+            if st.button('Clear loaded Nightscout data',disabled=loading('nightscout')):
+                del st.session_state.ns_loaded
+                st.rerun()
+        previous_garmin=st.session_state.get('garmin_loaded')
+        garmin=source_controls(profile_zone,first,last,refresh_all=refresh_all,inputs=garmin_inputs,categories=[GARMIN_IMPORTS[k] for k in garmin_selection] if len(garmin_selection)!=len(GARMIN_IMPORTS) else None)
+        if (load or refresh_all or garmin_inputs[2]) and (loading('nightscout') or loading('garmin')):st.rerun()
+        loading_status()
+
+        if refresh_all and not url.strip() and not garmin_inputs[0].strip():
+            st.info('Enter a Nightscout URL or Garmin folder before refreshing.')
     loaded = combined_snapshot(ns_loaded, garmin)
     if loaded is None:
+        with display_slot:st.caption('Recorded data to display · nothing loaded')
         return None
-    with st.expander("Recorded data display", expanded=True):
+    with display_slot:
+        st.markdown('**Recorded data to display**')
         loaded.setdefault("_chart_cache", {})
         st.caption(f"{loaded['zone']} · Updated {loaded['loaded_at'].astimezone(ZoneInfo(loaded['zone'])).strftime('%d %b %H:%M')}")
-        for warning in loaded["warnings"]:
-            st.warning(warning)
-        previous=st.session_state.get('ns_mode','One day')
-        if 'health_date_view' not in st.session_state:st.session_state.health_date_view='One day' if previous=='One day' else 'Date range'
-        selection=st.segmented_control('Recorded data view',['One day','Date range'],key='health_date_view') or 'One day'
-        mode='Median + band' if selection=='Date range' else 'One day'
-        st.session_state.ns_mode=mode
-        days = day_calendar(loaded, multiple=mode != "One day")
-        if len(set(days))<2:mode='One day'
-        st.markdown('**Data layers**')
-        options=[label for label,key in GARMIN_MAIN_LAYERS.items()
-                 if any(not loaded['data'].get('g_steps' if k=='g_steps_cumulative' else k,pd.DataFrame()).empty for k in
-                        (list(SLEEP_OVERLAYS.values())+['g_sleep'] if key=='g_sleep' else GROUP_KEYS.get(key,[key])))]
-        categories={'diabetes':[x for x in DIABETES_LAYERS if x not in ('Profile percentage hourly','Site changes hourly','Sensor changes hourly')] if ns_loaded is not None else [],'garmin':options}
-        if len(set(days))>1:
-            from nightscout_charts import EVENT_LAYERS
-            analyses=[]
-            if ns_loaded is not None and not loaded['data'].get('glucose',pd.DataFrame()).empty:
-                from insights import insight_available
-                for label,key in INSIGHT_LAYERS.items():
-                    if insight_available(loaded,key):analyses.append(label)
-            categories['analysis']=list(EVENT_LAYERS)+analyses if ns_loaded is not None else []
-        from nightscout_charts import EVENT_LAYERS
-        categories['diabetes']=[x for x in categories['diabetes'] if x not in EVENT_LAYERS]
-        if ns_loaded is not None:
-            imported=set(ns_loaded.get('loaded_categories',['glucose','treatments','loop']))
-            needs={'Glucose':{'glucose'},'COB + Carbs':{'loop','treatments'},'IOB + Boluses':{'loop','treatments'},'Temporary Basal':{'treatments'},'Temporary Targets':{'treatments'},'Variable Sensitivity':{'loop'}}
-            categories['diabetes']=[label for label in categories['diabetes'] if needs.get(label,set()) & imported]
-            if 'analysis' in categories:
-                def analysis_loaded(label):
-                    if label in INSIGHT_LAYERS:return 'glucose' in imported
-                    if EVENT_LAYERS[label]=='profile_percentage':return ns_loaded.get('availability',{}).get('profiles',bool(ns_loaded.get('recorded_profiles')))
-                    return 'treatments' in imported
-                categories['analysis']=[label for label in categories['analysis'] if analysis_loaded(label)]
-        defaults=[next(iter(categories['diabetes']),next(iter(options),'Custom graph'))]
-        available=[x for group in categories.values() for x in group]+['Custom graph']
-        current=[x for x in normalize_layers(st.session_state.get('ns_layers',defaults)) if x in available]
-        st.session_state.ns_layers=current
-        for category,choices in categories.items():
-            st.session_state['ns_layers_'+category]=[x for x in current if x in choices]
-        for category,choices in categories.items():
-            if not choices:continue
-            st.pills(category.title(),choices,selection_mode='multi',key='ns_layers_'+category,
-                     format_func=lambda value:value.removeprefix('Garmin · '),on_change=_layers_changed)
-        restore_graph_controls(available)
-        custom_ids=custom_layer_controls()
-        layers=st.session_state.ns_layers
-        configuration_controls()
-        if st.session_state.get("health_config_notice"):st.caption(st.session_state.pop("health_config_notice"))
-        overlay = "None"
-        show_targets = True  # Controlled locally on the graph, including fullscreen.
-        for label in set(layers):
-            key = LAYERS[label]
-            if key=='g_steps_cumulative':key='g_steps'
-            if key=='custom' or key.startswith('insight_'):continue
-            if key in ('profile_percentage','site_changes','sensor_changes'):continue
-            if all(k not in loaded["data"] or loaded["data"][k].empty for k in GROUP_KEYS.get(key, [key])) and (key != "basal" or loaded["data"]["basal_percent"].empty):
-                st.caption(f"No {label.lower()} records were returned for the loaded dates.")
-        return {"loaded": loaded, "days": sorted(days), "mode": mode, "layers": layers, "overlay": overlay, "show_targets": show_targets, "custom_ids": custom_ids, "custom_catalog": st.session_state.health_custom_catalog}
+        with status_slot:
+            for warning in loaded["warnings"]:st.warning(warning)
+        days = day_calendar(loaded, multiple=True)
+        mode = 'Median + band' if len(days)>1 else 'One day'
+        # Every loaded source is available to graph instances. Importing never creates panels.
+        from insights import insight_available
+        layers=[]
+        for label,key in LAYERS.items():
+            if key=='compact':
+                if not loaded['data'].get('glucose',pd.DataFrame()).empty:layers.append(label)
+                continue
+            if key=='custom':
+                layers.append(label);continue
+            if key.startswith('insight_'):
+                if insight_available(loaded,key):layers.append(label)
+                continue
+            if key in ('profile_percentage','site_changes','sensor_changes'):
+                if ns_loaded is not None:layers.append(label)
+                continue
+            fields=list(SLEEP_OVERLAYS.values())+['g_sleep'] if key=='g_sleep' else GROUP_KEYS.get(key,[key])
+            if any(not loaded['data'].get(k,pd.DataFrame()).empty for k in fields):layers.append(label)
+        if st.session_state.get('health_config_notice'):st.caption(st.session_state.pop('health_config_notice'))
+        return dict(loaded=loaded,days=sorted(days),mode=mode,layers=layers,overlay='None',show_targets=True,
+                    custom_ids=None,custom_catalog=None,workspace_graphs=True,
+                    export_workspace=st.session_state.get('workspace_type')=='Data' and st.session_state.get('data_workspace')=='Export')
 
 
 

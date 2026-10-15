@@ -209,13 +209,108 @@ def aligned_series(loaded,days,key,unit):
         observed=(hours>0)&(hours<=MAX_GAP_MINUTES/60)
         exposure=float(np.sum((hours*(above[:-1]+above[1:])/2)[observed]))
         label=str(event.get('label','Event'))+' · '+origin.tz_convert(zone).strftime('%Y-%m-%d %H:%M')
-        result.append(dict(id=origin.isoformat()+':'+str(i),label=label,x=xs,glucose=ys,rate=rates,jump=jumps,baseline=value,baseline_note=note,
+        result.append(dict(id=origin.isoformat()+':'+str(i),date=origin.tz_convert(zone).strftime('%Y-%m-%d'),label=label,x=xs,glucose=ys,rate=rates,jump=jumps,baseline=value,baseline_note=note,
                            start=origin.isoformat(),end=stop.isoformat(),duration=(stop-origin).total_seconds()/60,
                            context={field:aligned_context(frame,origin,stop,selected) for field,frame in context.items()},
                            **({'meal':meal_context(loaded,event)} if key=='meal' else {'sleep':event['sleep']} if key.startswith('sleep') else {}),
                            statistics=dict(cv=float(bins.std(ddof=0)/mean*100) if mean else None,
                                            tir=float(bins.between(low,high).mean()*100),above_exposure=float(exposure),observed_bins=len(bins))))
     return result
+
+
+def sleep_overview(loaded,days,unit):
+    """Individual recorded nights on a local clock; select by wake date.
+
+    Unlike aggregate responses, a chosen night includes its loaded previous
+    evening. The browser clips the post-wake window without fetching again.
+    """
+    from garmin_data import STAGES,METRICS,SLEEP_OVERLAYS
+    points,_=cached(loaded,'insight_glucose',unit,lambda:glucose_points(loaded,unit))
+    events=cached(loaded,'insight_events','sleep',lambda:sleep_events(loaded))
+    stages=loaded['data'].get('g_sleep',pd.DataFrame()).copy()
+    if not stages.empty:
+        stages['time']=pd.to_datetime(stages.time,utc=True)
+        stages['end']=pd.to_datetime(stages.end,utc=True)
+        stages=stages.dropna(subset=['time','end']).sort_values('time')
+    zone=loaded['zone'];selected=set(days)
+    data_end=min(pd.Timestamp(loaded['loaded_at']),pd.Timestamp(loaded['last']+timedelta(days=1)).tz_localize(zone).tz_convert('UTC'))
+    signal_frames={}
+    for key in SLEEP_OVERLAYS.values():
+        frame=loaded['data'].get(key,pd.DataFrame()).copy()
+        if frame.empty or not {'time','value'}.issubset(frame.columns):continue
+        frame['time']=pd.to_datetime(frame.time,utc=True)
+        if 'end' in frame:frame['end']=pd.to_datetime(frame.end,utc=True)
+        signal_frames[key]=frame.dropna(subset=['time','value']).sort_values('time')
+    rows=[]
+    for i,event in enumerate(events):
+        start,wake=event['time'],event['end'];local_wake=wake.tz_convert(zone)
+        if local_wake.date() not in selected:continue
+        midnight=local_wake.tz_localize(None).normalize()
+        clock=lambda t:(t.tz_convert(zone).tz_localize(None)-midnight).total_seconds()/3600
+        def stage_spans(a,b):
+            # Split at offset changes: a fall-back interval must not disappear
+            # merely because its end clock reads earlier than its start clock.
+            probes=list(pd.date_range(a,b,freq='15min'))+[b];left=a;previous=a
+            for probe in probes[1:]:
+                if probe.tz_convert(zone).utcoffset()!=previous.tz_convert(zone).utcoffset():
+                    lo,hi=previous,probe;offset=lo.tz_convert(zone).utcoffset()
+                    while (hi-lo).total_seconds()>1:
+                        mid=lo+(hi-lo)/2
+                        if mid.tz_convert(zone).utcoffset()==offset:lo=mid
+                        else:hi=mid
+                    boundary=hi.ceil('s')
+                    yield left,boundary,clock(left),clock(boundary-pd.Timedelta(seconds=1))+1/3600
+                    left=boundary
+                previous=probe
+            if b>left:yield left,b,clock(left),clock(b)
+        stop=min(data_end,wake+pd.Timedelta(hours=12),events[i+1]['time'] if i+1<len(events) else data_end)
+        stop=max(wake,stop)
+        intervals=[]
+        if not stages.empty:
+            for r in stages[stages.time.lt(wake)&stages.end.gt(start)].itertuples():
+                a,b=max(start,r.time),min(wake,r.end)
+                if b<=a:continue
+                stage=r.stage if r.stage in STAGES else 'unknown'
+                for left,right,x0,x1 in stage_spans(a,b):
+                    intervals.append(dict(start=x0,end=x1,stage=stage,
+                        label=STAGES[stage][1],color=STAGES[stage][2],
+                        detail=left.tz_convert(zone).strftime('%H:%M %z')+'–'+right.tz_convert(zone).strftime('%H:%M %z')))
+        xs=[];ys=[];after=[];clocks=[];previous=None
+        part=points.iloc[points.time.searchsorted(start):points.time.searchsorted(stop)] if not points.empty else points
+        for r in part.itertuples():
+            x=clock(r.time)
+            if previous is not None and ((r.time-previous).total_seconds()>MAX_GAP_MINUTES*60 or x<=clock(previous)):
+                xs.append(None);ys.append(None);after.append(None);clocks.append(None)
+            xs.append(x);ys.append(float(r.value));after.append((r.time-wake).total_seconds()/3600)
+            clocks.append(r.time.tz_convert(zone).strftime('%Y-%m-%d %H:%M %z'));previous=r.time
+        signals={}
+        for key,frame in signal_frames.items():
+            signal=dict(label=METRICS[key][0],unit=METRICS[key][1],color=METRICS[key][2],interval='end' in frame,x=[],y=[],after=[],clocks=[])
+            def add_signal(t,value,x=None):
+                signal['x'].append(clock(t) if x is None else x);signal['y'].append(float(value))
+                signal['after'].append((t-wake).total_seconds()/3600)
+                signal['clocks'].append(t.tz_convert(zone).strftime('%Y-%m-%d %H:%M %z'))
+            def gap():
+                for field in ('x','y','after','clocks'):signal[field].append(None)
+            if 'end' in frame:
+                for r in frame[frame.time.lt(stop)&frame.end.gt(start)].itertuples():
+                    if not np.isfinite(r.value):continue
+                    for a,b,x0,x1 in stage_spans(max(start,r.time),min(stop,r.end)):
+                        if signal['x']:gap()
+                        add_signal(a,r.value,x0);add_signal(b,r.value,x1)
+            else:
+                previous=None
+                for r in frame[frame.time.ge(start)&frame.time.lt(stop)].itertuples():
+                    if not np.isfinite(r.value):continue
+                    if previous is not None and ((r.time-previous).total_seconds()>MAX_GAP_MINUTES*60 or clock(r.time)<=clock(previous)):gap()
+                    add_signal(r.time,r.value);previous=r.time
+            if signal['x']:signals[key]=signal
+        rows.append(dict(id=start.isoformat(),date=local_wake.strftime('%Y-%m-%d'),zone=str(zone),signals=signals,
+            start=clock(start),wake=clock(wake),end=clock(stop),
+            wake_stamp=wake.isoformat(),end_stamp=stop.isoformat(),
+            start_label=start.tz_convert(zone).strftime('%H:%M'),wake_label=local_wake.strftime('%H:%M'),
+            source=event['sleep']['source'],stages=intervals,x=xs,glucose=ys,after=after,clocks=clocks))
+    return rows
 
 
 def insight_figures(loaded,days,unit,dark,selected=None):
@@ -235,6 +330,7 @@ def insight_figures(loaded,days,unit,dark,selected=None):
         style_figure(fig,label+' · '+date_label(days),'Glucose ('+unit+')',loaded['zone'],dark,height=350)
         fig.update_layout(meta=dict(kind='insight',dataset='insight_'+key,insight=key,non_time=True,series=series,insight_title=fig.layout.title.text,**({'after_series':after} if after is not None else {}),glucose_color=dataset_color('glucose',dark)),
                           xaxis=dict(title='Time since '+('sensor start' if key.startswith('sensor') else 'site change' if key.startswith('site') else 'carb entry' if key=='meal' else 'sleep start' if key=='sleep' else 'activity end' if key=='activity_after' else 'activity start')+' (hours)',autorange=True))
+        if key=='sleep':fig.layout.meta['sleep_overview_rows']=cached(loaded,'insights',('sleep_overview',tuple(days),unit),lambda:sleep_overview(loaded,days,unit))
         # Source x is minutes; the shared browser Insights transform converts to hours.
         if not series:fig.add_annotation(text='No usable recorded event periods with glucose in the selected dates',xref='paper',yref='paper',x=.5,y=.5,showarrow=False)
         figures.append(fig)
